@@ -451,8 +451,7 @@ export default function (pi: ExtensionAPI): void {
         break;
       }
 
-      case "status":
-      default: {
+      case "status": {
         const stats = auth.getStats();
         const status = transportManager.getStatus();
         const lines = [
@@ -481,6 +480,9 @@ export default function (pi: ExtensionAPI): void {
         context.ui.notify(lines.join("\n"), "info");
         break;
       }
+      default:
+        context.ui.notify(`Unknown subcommand: ${subcommand}. Run /msg-bridge help`, "warning");
+        break;
     }
     },
   });

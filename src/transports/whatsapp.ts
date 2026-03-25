@@ -104,6 +104,10 @@ export class WhatsAppProvider implements ITransportProvider {
 
         this._isConnected = false;
 
+        if (this.errorHandler && statusCode !== baileys.DisconnectReason.loggedOut) {
+          this.errorHandler(new Error(`connection closed (status ${statusCode})`));
+        }
+
         // If unauthorized (401), clear invalid auth
         if (statusCode === 401) {
           try {
