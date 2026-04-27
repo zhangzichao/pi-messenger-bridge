@@ -174,7 +174,7 @@ export default function (pi: ExtensionAPI): void {
       };
 
       const taggedMessage = `[📱 @${msg.username} via ${msg.transport}]: ${msg.content}`;
-      pi.sendUserMessage(taggedMessage);
+      pi.sendUserMessage(taggedMessage, { deliverAs: "steer" });
     });
 
     transportManager.onError((err, transport) => {
@@ -211,10 +211,11 @@ export default function (pi: ExtensionAPI): void {
       const responseText = extractTextFromMessage(message);
       const toolCallsText = formatToolCalls(message);
       const hasPendingTools = hasToolCalls(message);
+      const config = loadConfig();
 
       const parts: string[] = [];
       if (responseText) parts.push(responseText);
-      if (toolCallsText) parts.push(toolCallsText);
+      if (toolCallsText && !config.hideToolCalls) parts.push(toolCallsText);
 
       if (parts.length === 0) return;
 
@@ -286,6 +287,7 @@ export default function (pi: ExtensionAPI): void {
           "/msg-bridge configure whatsapp",
           "                              Configure WhatsApp (scan QR)",
           "/msg-bridge widget            Toggle status widget on/off",
+          "/msg-bridge toggletools       Toggle tool call visibility",
           "",
           "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
         ];
@@ -478,6 +480,15 @@ export default function (pi: ExtensionAPI): void {
         lines.push("━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
         context.ui.notify(lines.join("\n"), "info");
+        break;
+      }
+
+      case "toggletools": {
+        const cfg3 = loadConfig();
+        cfg3.hideToolCalls = cfg3.hideToolCalls === false;
+        saveConfig(cfg3);
+        const toolState = cfg3.hideToolCalls ? "hidden" : "shown";
+        context.ui.notify(`🔧 Tool calls ${toolState} in remote messages`, "info");
         break;
       }
       default:
