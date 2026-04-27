@@ -219,7 +219,8 @@ export default function (pi: ExtensionAPI): void {
       if (toolCallsText && !config.hideToolCalls) parts.push(toolCallsText);
 
       if (parts.length === 0) {
-        if (!hasPendingTools) pendingRemoteChat = null;
+        // Nothing to send this turn — don't touch pendingRemoteChat;
+        // a future turn_end may have the actual response text.
         return;
       }
 
