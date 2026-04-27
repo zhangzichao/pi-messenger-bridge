@@ -214,10 +214,14 @@ export default function (pi: ExtensionAPI): void {
       const config = loadConfig();
 
       const parts: string[] = [];
-      if (responseText) parts.push(responseText);
+      const trimmedResponse = responseText?.trim();
+      if (trimmedResponse) parts.push(trimmedResponse);
       if (toolCallsText && !config.hideToolCalls) parts.push(toolCallsText);
 
-      if (parts.length === 0) return;
+      if (parts.length === 0) {
+        if (!hasPendingTools) pendingRemoteChat = null;
+        return;
+      }
 
       const fullText = parts.join("\n\n");
 
