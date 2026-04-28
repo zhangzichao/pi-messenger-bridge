@@ -29,5 +29,5 @@ Thumbs.db
 .temp/
 .pi/readcache
 .claude
-.vscode.pi-lens/
+.vscode
 .pi-lens/
