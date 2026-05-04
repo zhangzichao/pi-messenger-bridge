@@ -1,77 +1,223 @@
+import * as crypto from "crypto";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { getDefaultWhatsAppAuthPath, getWorkspaceBridgeDir } from "./config.js";
+import type { MsgBridgeConfig } from "./types.js";
 
 /**
- * Single-instance connection guard.
+ * Workspace ownership lock.
  *
- * Two layers:
- *  1. global flag  — catches same-process re-entrant calls (e.g. sub-agents
- *                    spawned inside the same Node.js process, same PID).
- *  2. PID lock file — catches separate-process duplicates (e.g. sub-agents
- *                    launched as child processes with different PIDs).
+ * Prevents two pi sessions started in the same workspace from both mutating the
+ * workspace-local msg-bridge state.
  */
+const WORKSPACE_LOCK_PATH = path.join(getWorkspaceBridgeDir(), "session.lock");
 
-const LOCK_PATH = path.join(os.homedir(), ".pi", "msg-bridge.lock");
+/**
+ * Global per-bot lock directory.
+ *
+ * Prevents the same bot/session identity from being connected by multiple pi
+ * sessions at once, while still allowing different bots to connect elsewhere.
+ */
+const GLOBAL_LOCK_DIR = path.join(os.homedir(), ".pi", "msg-bridge", "locks");
 
 const g = global as any;
 if (!g.__msgBridgeInstanceId) {
   g.__msgBridgeInstanceId = Math.random().toString(36).slice(2);
 }
-const instanceId: string = g.__msgBridgeInstanceId;
+if (!g.__msgBridgeWorkspaceLocks) {
+  g.__msgBridgeWorkspaceLocks = new Map<string, string>();
+}
+if (!g.__msgBridgeBotLocks) {
+  g.__msgBridgeBotLocks = new Map<string, string>();
+}
 
-export function acquireLock(): boolean {
-  // Layer 1: same-process guard via a global flag
-  if (g.__msgBridgeConnected && g.__msgBridgeOwner !== instanceId) {
+const instanceId: string = g.__msgBridgeInstanceId;
+const workspaceLocks: Map<string, string> = g.__msgBridgeWorkspaceLocks;
+const botLocks: Map<string, string> = g.__msgBridgeBotLocks;
+
+export interface BotLockSpec {
+  transport: string;
+  key: string;
+  label: string;
+}
+
+function ensureDir(dirPath: string): void {
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true, mode: 0o700 });
+  }
+
+  try {
+    fs.chmodSync(dirPath, 0o700);
+  } catch {
+    // ignore permission fix failures
+  }
+}
+
+function readLockFile(lockPath: string): { pid: number; owner: string } | null {
+  if (!fs.existsSync(lockPath)) return null;
+
+  try {
+    const raw = fs.readFileSync(lockPath, "utf-8").trim().split(":");
+    const pid = parseInt(raw[0] ?? "", 10);
+    const owner = raw[1] ?? "";
+    if (Number.isNaN(pid)) return null;
+    return { pid, owner };
+  } catch {
+    return null;
+  }
+}
+
+function acquireFileLock(lockPath: string, memoryMap: Map<string, string>, memoryKey: string, dirPath: string): boolean {
+  const inMemoryOwner = memoryMap.get(memoryKey);
+  if (inMemoryOwner && inMemoryOwner !== instanceId) {
     return false;
   }
 
-  // Layer 2: cross-process guard via PID lock file
   try {
-    if (fs.existsSync(LOCK_PATH)) {
-      const raw = fs.readFileSync(LOCK_PATH, "utf-8").trim().split(":");
-      const pid = parseInt(raw[0], 10);
-      const owner = raw[1] ?? "";
-      if (!Number.isNaN(pid) && pid === process.pid && owner !== instanceId) {
+    const existing = readLockFile(lockPath);
+    if (existing) {
+      if (existing.pid === process.pid && existing.owner !== instanceId) {
         return false;
       }
-      if (!Number.isNaN(pid) && pid !== process.pid) {
+
+      if (existing.pid !== process.pid) {
         try {
-          process.kill(pid, 0); // throws if process does not exist
-          return false; // another live process holds the lock
+          process.kill(existing.pid, 0);
+          return false;
         } catch {
           // stale lock from a dead process — overwrite below
         }
       }
     }
-    const configDir = path.join(os.homedir(), ".pi");
-    if (!fs.existsSync(configDir)) {
-      fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
+
+    ensureDir(dirPath);
+    fs.writeFileSync(lockPath, `${process.pid}:${instanceId}`, { mode: 0o600 });
+    try {
+      fs.chmodSync(lockPath, 0o600);
+    } catch {
+      // ignore
     }
-    fs.writeFileSync(LOCK_PATH, `${process.pid}:${instanceId}`, { mode: 0o600 });
   } catch {
-    // lock file mechanics failed — fall through, global flag is still set below
+    // lock file mechanics failed — rely on in-memory ownership below
   }
 
-  g.__msgBridgeConnected = true;
-  g.__msgBridgeOwner = instanceId;
+  memoryMap.set(memoryKey, instanceId);
   return true;
 }
 
-export function releaseLock(): void {
-  if (g.__msgBridgeOwner !== instanceId) return;
-  g.__msgBridgeConnected = false;
-  g.__msgBridgeOwner = undefined;
+function releaseFileLock(lockPath: string, memoryMap: Map<string, string>, memoryKey: string): void {
+  if (memoryMap.get(memoryKey) !== instanceId) return;
+
+  memoryMap.delete(memoryKey);
+
   try {
-    if (fs.existsSync(LOCK_PATH)) {
-      const raw = fs.readFileSync(LOCK_PATH, "utf-8").trim().split(":");
-      const pid = parseInt(raw[0], 10);
-      const owner = raw[1] ?? "";
-      if (pid === process.pid && owner === instanceId) {
-        fs.unlinkSync(LOCK_PATH);
-      }
+    const existing = readLockFile(lockPath);
+    if (existing && existing.pid === process.pid && existing.owner === instanceId) {
+      fs.unlinkSync(lockPath);
     }
   } catch {
     // ignore
+  }
+}
+
+function hashFingerprint(value: string): string {
+  return crypto.createHash("sha256").update(value).digest("hex").slice(0, 16);
+}
+
+export function getWorkspaceLockPath(): string {
+  return WORKSPACE_LOCK_PATH;
+}
+
+export function acquireWorkspaceLock(): boolean {
+  return acquireFileLock(WORKSPACE_LOCK_PATH, workspaceLocks, WORKSPACE_LOCK_PATH, getWorkspaceBridgeDir());
+}
+
+export function releaseWorkspaceLock(): void {
+  releaseFileLock(WORKSPACE_LOCK_PATH, workspaceLocks, WORKSPACE_LOCK_PATH);
+}
+
+export function isWorkspaceLockOwnedByThisSession(): boolean {
+  return workspaceLocks.get(WORKSPACE_LOCK_PATH) === instanceId;
+}
+
+export function getBotLockPath(lockKey: string): string {
+  return path.join(GLOBAL_LOCK_DIR, `${lockKey}.lock`);
+}
+
+export function acquireBotLock(lockKey: string): boolean {
+  return acquireFileLock(getBotLockPath(lockKey), botLocks, lockKey, GLOBAL_LOCK_DIR);
+}
+
+export function releaseBotLock(lockKey: string): void {
+  releaseFileLock(getBotLockPath(lockKey), botLocks, lockKey);
+}
+
+export function releaseAllOwnedBotLocks(): void {
+  const ownedKeys = Array.from(botLocks.entries())
+    .filter(([, owner]) => owner === instanceId)
+    .map(([key]) => key);
+
+  for (const key of ownedKeys) {
+    releaseBotLock(key);
+  }
+}
+
+export function getConfiguredBotLockSpecs(config: MsgBridgeConfig): BotLockSpec[] {
+  const specs: BotLockSpec[] = [];
+
+  if (config.telegram?.token) {
+    specs.push({
+      transport: "telegram",
+      key: `telegram-${hashFingerprint(config.telegram.token)}`,
+      label: "Telegram bot",
+    });
+  }
+
+  if (config.whatsapp) {
+    const authPath = path.resolve(config.whatsapp.authPath || getDefaultWhatsAppAuthPath());
+    specs.push({
+      transport: "whatsapp",
+      key: `whatsapp-${hashFingerprint(authPath)}`,
+      label: "WhatsApp session",
+    });
+  }
+
+  if (config.slack?.botToken && config.slack?.appToken) {
+    specs.push({
+      transport: "slack",
+      key: `slack-${hashFingerprint(`${config.slack.botToken}\n${config.slack.appToken}`)}`,
+      label: "Slack bot",
+    });
+  }
+
+  if (config.discord?.token) {
+    specs.push({
+      transport: "discord",
+      key: `discord-${hashFingerprint(config.discord.token)}`,
+      label: "Discord bot",
+    });
+  }
+
+  return specs.sort((a, b) => a.key.localeCompare(b.key));
+}
+
+export function acquireBotLocks(specs: BotLockSpec[]): { ok: true; acquired: BotLockSpec[] } | { ok: false; failed: BotLockSpec; acquired: BotLockSpec[] } {
+  const acquired: BotLockSpec[] = [];
+
+  for (const spec of [...specs].sort((a, b) => a.key.localeCompare(b.key))) {
+    if (!acquireBotLock(spec.key)) {
+      releaseBotLocks(acquired);
+      return { ok: false, failed: spec, acquired };
+    }
+    acquired.push(spec);
+  }
+
+  return { ok: true, acquired };
+}
+
+export function releaseBotLocks(specs: BotLockSpec[]): void {
+  for (const spec of [...specs].sort((a, b) => b.key.localeCompare(a.key))) {
+    releaseBotLock(spec.key);
   }
 }

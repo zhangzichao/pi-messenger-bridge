@@ -1,19 +1,26 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 import { ChallengeAuth } from "./auth/challenge-auth.js";
-import { loadConfig, saveConfig } from "./config.js";
+import { getDefaultWhatsAppAuthPath, loadConfig, loadFileConfig, saveConfig } from "./config.js";
 import { extractTextFromMessage, formatToolCalls, hasToolCalls, splitMessage } from "./formatting.js";
-import { acquireLock, releaseLock } from "./lock.js";
+import {
+  acquireBotLocks,
+  acquireWorkspaceLock,
+  getConfiguredBotLockSpecs,
+  getWorkspaceLockPath,
+  releaseAllOwnedBotLocks,
+  releaseBotLocks,
+  releaseWorkspaceLock,
+} from "./lock.js";
 import { DiscordProvider } from "./transports/discord.js";
 import { TransportManager } from "./transports/manager.js";
 import { MatrixProvider } from "./transports/matrix.js";
 import { SlackProvider } from "./transports/slack.js";
 import { TelegramProvider } from "./transports/telegram.js";
 import { WhatsAppProvider } from "./transports/whatsapp.js";
-import type { PendingRemoteChat, TransportStatus } from "./types.js";
+import type { MsgBridgeConfig, PendingRemoteChat, TransportStatus } from "./types.js";
 import { openMainMenu } from "./ui/main-menu.js";
 import { createStatusWidget } from "./ui/status-widget.js";
 
@@ -26,12 +33,34 @@ export default function (pi: ExtensionAPI): void {
   let pendingRemoteChat: PendingRemoteChat | null = null;
   let auth: ChallengeAuth;
   let ctx: ExtensionContext;
+  let workspaceAvailable = false;
+
+  function getWorkspaceUnavailableMessage(): string {
+    return `ℹ️ msg-bridge is disabled in this session because another pi instance already owns this workspace (${getWorkspaceLockPath()}).`;
+  }
+
+  function notifyBotLockConflict(lockLabel: string, ui: ExtensionContext["ui"] | { notify(message: string, type: "info" | "warning" | "error"): void }): void {
+    ui.notify(`⚠️ ${lockLabel} is already connected in another pi session. Disconnect it there first.`, "warning");
+  }
+
+  function ensureWorkspaceAvailable(ui: ExtensionContext["ui"] | { notify(message: string, type: "info" | "warning" | "error"): void }): boolean {
+    if (workspaceAvailable) {
+      return true;
+    }
+    ui.notify(getWorkspaceUnavailableMessage(), "warning");
+    return false;
+  }
 
   /**
    * Update status widget
    */
   function updateWidget(): void {
-    const config = loadConfig();
+    if (!ctx || !workspaceAvailable) {
+      ctx?.ui.setWidget("msg-bridge-status", undefined);
+      return;
+    }
+
+    const config = loadFileConfig();
 
     if (config.showWidget === false) {
       ctx.ui.setWidget("msg-bridge-status", undefined);
@@ -58,9 +87,66 @@ export default function (pi: ExtensionAPI): void {
    * Save auth state to config
    */
   function saveAuthState(): void {
-    const config = loadConfig();
+    if (!workspaceAvailable) return;
+
+    const config = loadFileConfig();
     config.auth = auth.exportConfig();
     saveConfig(config);
+  }
+
+  async function connectConfiguredTransports(ui: ExtensionContext["ui"]): Promise<boolean> {
+    if (!ensureWorkspaceAvailable(ui)) {
+      return false;
+    }
+
+    const lockResult = acquireBotLocks(getConfiguredBotLockSpecs(loadConfig()));
+    if (!lockResult.ok) {
+      notifyBotLockConflict(lockResult.failed.label, ui);
+      return false;
+    }
+
+    try {
+      await transportManager.connectAll();
+      const fileConfig = loadFileConfig();
+      fileConfig.autoConnect = true;
+      saveConfig(fileConfig);
+      ui.notify("✅ Connected to all configured transports", "info");
+      updateWidget();
+      return true;
+    } catch (err) {
+      releaseBotLocks(lockResult.acquired);
+      ui.notify(`❌ Connection failed: ${(err as Error).message}`, "error");
+      return false;
+    }
+  }
+
+  async function disconnectConfiguredTransports(ui: ExtensionContext["ui"]): Promise<void> {
+    if (!ensureWorkspaceAvailable(ui)) {
+      return;
+    }
+
+    await transportManager.disconnectAll();
+    releaseAllOwnedBotLocks();
+    const fileConfig = loadFileConfig();
+    fileConfig.autoConnect = false;
+    saveConfig(fileConfig);
+    ui.notify("🔌 Disconnected from all transports", "info");
+    updateWidget();
+  }
+
+  function maybeClearMissingWhatsAppConfig(fileConfig: MsgBridgeConfig): void {
+    if (process.env.PI_WHATSAPP_AUTH_PATH || !fileConfig.whatsapp) {
+      return;
+    }
+
+    const authPath = fileConfig.whatsapp.authPath || getDefaultWhatsAppAuthPath();
+    const credsPath = path.join(authPath, "creds.json");
+    if (fs.existsSync(credsPath)) {
+      return;
+    }
+
+    delete fileConfig.whatsapp;
+    saveConfig(fileConfig);
   }
 
   /**
@@ -68,8 +154,7 @@ export default function (pi: ExtensionAPI): void {
    */
   pi.on("session_start", async (_event, context) => {
     ctx = context;
-
-    const config = loadConfig();
+    workspaceAvailable = acquireWorkspaceLock();
 
     auth = new ChallengeAuth(
       (code, username) => {
@@ -87,8 +172,18 @@ export default function (pi: ExtensionAPI): void {
       saveAuthState
     );
 
-    if (config.auth) {
-      auth.loadFromConfig(config.auth);
+    if (!workspaceAvailable) {
+      ctx.ui.notify(getWorkspaceUnavailableMessage(), "info");
+      updateWidget();
+      return;
+    }
+
+    const fileConfig = loadFileConfig();
+    maybeClearMissingWhatsAppConfig(fileConfig);
+    const config = loadConfig();
+
+    if (fileConfig.auth) {
+      auth.loadFromConfig(fileConfig.auth);
     }
 
     // Initialize transports in the background (non-blocking)
@@ -105,24 +200,20 @@ export default function (pi: ExtensionAPI): void {
       }
 
       if (config.whatsapp) {
-        const whatsappAuthPath = config.whatsapp.authPath || path.join(
-          os.homedir(),
-          ".pi",
-          "msg-bridge-whatsapp-auth"
-        );
-
+        const whatsappAuthPath = config.whatsapp.authPath || getDefaultWhatsAppAuthPath();
         const credsPath = path.join(whatsappAuthPath, "creds.json");
         if (fs.existsSync(credsPath)) {
           transportPromises.push(
             Promise.resolve().then(() => {
-              const whatsappConfig = { ...config.whatsapp!, debug: config.debug };
+              const whatsappConfig = {
+                ...config.whatsapp!,
+                authPath: whatsappAuthPath,
+                debug: config.debug,
+              };
               const whatsappProvider = new WhatsAppProvider(whatsappConfig, auth);
               transportManager.addTransport(whatsappProvider);
             })
           );
-        } else {
-          delete config.whatsapp;
-          saveConfig(config);
         }
       }
 
@@ -157,15 +248,16 @@ export default function (pi: ExtensionAPI): void {
 
       // Auto-connect if configured
       const transports = transportManager.getAllTransports();
-      if (transports.length > 0 && config.autoConnect !== false) {
-        if (!acquireLock()) {
-          ctx.ui.notify("ℹ️ msg-bridge: another instance is already connected — skipping auto-connect", "info");
+      if (transports.length > 0 && fileConfig.autoConnect !== false) {
+        const lockResult = acquireBotLocks(getConfiguredBotLockSpecs(config));
+        if (!lockResult.ok) {
+          notifyBotLockConflict(lockResult.failed.label, ctx.ui);
         } else {
           try {
             await transportManager.connectAll();
             updateWidget();
           } catch (err) {
-            releaseLock();
+            releaseBotLocks(lockResult.acquired);
             ctx.ui.notify(`⚠️ Some transports failed to connect: ${(err as Error).message}`, "warning");
           }
         }
@@ -268,11 +360,12 @@ export default function (pi: ExtensionAPI): void {
   });
 
   /**
-   * Cleanup on session exit — release lock and disconnect transports
+   * Cleanup on session exit — release locks and disconnect transports
    */
   pi.on("session_shutdown", async (_event, _context) => {
     await transportManager.disconnectAll();
-    releaseLock();
+    releaseAllOwnedBotLocks();
+    releaseWorkspaceLock();
   });
 
   /**
@@ -284,258 +377,261 @@ export default function (pi: ExtensionAPI): void {
       const parts = args.trim().split(/\s+/).filter(p => p.length > 0);
       const subcommand = parts[0] || "";
 
-    // No subcommand → open interactive menu
-    if (!subcommand || subcommand === "menu") {
-      await openMainMenu({
-        ui: context.ui,
-        transportManager,
-        auth,
-        updateWidget,
-      });
-      return;
-    }
-
-    switch (subcommand) {
-      case "help": {
-        const helpText = [
-          "━━━ Message Bridge Commands ━━━",
-          "",
-          "/msg-bridge                   Open interactive menu",
-          "/msg-bridge help              Show this help",
-          "/msg-bridge status            Show connection and user status",
-          "/msg-bridge connect           Connect to all transports",
-          "/msg-bridge disconnect        Disconnect from all transports",
-          "/msg-bridge configure telegram <token>",
-          "                              Configure Telegram bot",
-          "/msg-bridge configure whatsapp",
-          "                              Configure WhatsApp (scan QR)",
-          "/msg-bridge configure matrix <homeserver-url> <access-token>",
-          "                              Configure Matrix (Element X, etc)",
-          "/msg-bridge widget            Toggle status widget on/off",
-          "/msg-bridge toggletools       Toggle tool call visibility",
-          "",
-          "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-        ];
-        context.ui.notify(helpText.join("\n"), "info");
-        break;
+      // No subcommand → open interactive menu
+      if (!subcommand || subcommand === "menu") {
+        await openMainMenu({
+          ui: context.ui,
+          transportManager,
+          auth,
+          updateWidget,
+          isBridgeAvailable: () => workspaceAvailable,
+          getUnavailableMessage: getWorkspaceUnavailableMessage,
+        });
+        return;
       }
-      case "connect":
-        if (!acquireLock()) {
-          context.ui.notify("⚠️ Another msg-bridge instance is already connected. Run /msg-bridge disconnect there first.", "warning");
+
+      switch (subcommand) {
+        case "help": {
+          const helpText = [
+            "━━━ Message Bridge Commands ━━━",
+            "",
+            "/msg-bridge                   Open interactive menu",
+            "/msg-bridge help              Show this help",
+            "/msg-bridge status            Show connection and user status",
+            "/msg-bridge connect           Connect to all transports",
+            "/msg-bridge disconnect        Disconnect from all transports",
+            "/msg-bridge configure telegram <token>",
+            "                              Configure Telegram bot",
+            "/msg-bridge configure whatsapp",
+            "                              Configure WhatsApp (scan QR)",
+            "/msg-bridge widget            Toggle status widget on/off",
+            "",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+          ];
+          context.ui.notify(helpText.join("\n"), "info");
           break;
         }
-        try {
-          await transportManager.connectAll();
-          const cfg = loadConfig();
-          cfg.autoConnect = true;
-          saveConfig(cfg);
-          context.ui.notify("✅ Connected to all configured transports", "info");
-          updateWidget();
-        } catch (err) {
-          releaseLock();
-          context.ui.notify(
-            `❌ Connection failed: ${(err as Error).message}`,
-            "error"
-          );
-        }
-        break;
+        case "connect":
+          await connectConfiguredTransports(context.ui);
+          break;
 
-      case "disconnect": {
-        await transportManager.disconnectAll();
-        releaseLock();
-        const cfg = loadConfig();
-        cfg.autoConnect = false;
-        saveConfig(cfg);
-        context.ui.notify("🔌 Disconnected from all transports", "info");
-        updateWidget();
-        break;
-      }
-
-      case "configure": {
-        const platform = parts[1];
-        const token = parts.slice(2).join(" ");
-
-        if (!platform) {
-          context.ui.notify("Usage: /msg-bridge configure <platform> [token/path]", "error");
-          return;
+        case "disconnect": {
+          await disconnectConfiguredTransports(context.ui);
+          break;
         }
 
-        const config = loadConfig();
+        case "configure": {
+          if (!ensureWorkspaceAvailable(context.ui)) {
+            return;
+          }
 
-        switch (platform.toLowerCase()) {
-          case "telegram": {
-            if (!token) {
-              context.ui.notify("Usage: /msg-bridge configure telegram <bot-token>", "error");
-              return;
-            }
-            config.telegram = { token };
-            saveConfig(config);
-            const telegramProvider = new TelegramProvider(token, auth);
-            transportManager.addTransport(telegramProvider);
-            if (acquireLock()) {
+          const platform = parts[1];
+          const token = parts.slice(2).join(" ");
+
+          if (!platform) {
+            context.ui.notify("Usage: /msg-bridge configure <platform> [token/path]", "error");
+            return;
+          }
+
+          const fileConfig = loadFileConfig();
+          const effectiveConfig = loadConfig();
+
+          switch (platform.toLowerCase()) {
+            case "telegram": {
+              if (!token) {
+                context.ui.notify("Usage: /msg-bridge configure telegram <bot-token>", "error");
+                return;
+              }
+              fileConfig.telegram = { token };
+              saveConfig(fileConfig);
+              const telegramProvider = new TelegramProvider(token, auth);
+              transportManager.addTransport(telegramProvider);
+              const lockResult = acquireBotLocks(getConfiguredBotLockSpecs({ telegram: { token } }));
+              if (!lockResult.ok) {
+                context.ui.notify("✅ Telegram configured (that bot is already connected in another pi session — run /msg-bridge connect later)", "info");
+                break;
+              }
               try {
                 await telegramProvider.connect();
                 context.ui.notify("✅ Telegram configured and connected", "info");
               } catch (_err) {
-                releaseLock();
+                releaseBotLocks(lockResult.acquired);
                 context.ui.notify("✅ Telegram configured (run /msg-bridge connect to activate)", "info");
               }
-            } else {
-              context.ui.notify("✅ Telegram configured (another instance is connected — run /msg-bridge connect later)", "info");
+              updateWidget();
+              break;
             }
-            updateWidget();
-            break;
-          }
 
-          case "whatsapp": {
-            config.whatsapp = token ? { authPath: token } : {};
-            saveConfig(config);
-            const whatsappConfig = { ...config.whatsapp, debug: config.debug };
-            const whatsappProvider = new WhatsAppProvider(whatsappConfig, auth);
-            transportManager.addTransport(whatsappProvider);
-            if (acquireLock()) {
+            case "whatsapp": {
+              fileConfig.whatsapp = token ? { authPath: token } : {};
+              saveConfig(fileConfig);
+              const whatsappAuthPath = fileConfig.whatsapp.authPath || getDefaultWhatsAppAuthPath();
+              const whatsappConfig = {
+                ...fileConfig.whatsapp,
+                authPath: whatsappAuthPath,
+                debug: effectiveConfig.debug,
+              };
+              const whatsappProvider = new WhatsAppProvider(whatsappConfig, auth);
+              transportManager.addTransport(whatsappProvider);
+              const lockResult = acquireBotLocks(getConfiguredBotLockSpecs({ whatsapp: { authPath: whatsappAuthPath } }));
+              if (!lockResult.ok) {
+                context.ui.notify("✅ WhatsApp configured (that session is already connected in another pi session — run /msg-bridge connect later)", "info");
+                break;
+              }
               try {
                 await whatsappProvider.connect(true);
                 context.ui.notify("✅ WhatsApp configured and connecting (scan QR code in terminal)...", "info");
               } catch (err) {
-                releaseLock();
+                releaseBotLocks(lockResult.acquired);
                 context.ui.notify(`⚠️ WhatsApp setup error: ${(err as Error).message}`, "error");
               }
-            } else {
-              context.ui.notify("✅ WhatsApp configured (another instance is connected — run /msg-bridge connect later)", "info");
-            }
-            updateWidget();
-            break;
-          }
-
-          case "slack": {
-            const parts2 = token.split(/\s+/);
-            const botToken = parts2[0];
-            const appToken = parts2[1];
-
-            if (!botToken || !appToken) {
-              context.ui.notify("Usage: /msg-bridge configure slack <bot-token> <app-token>", "error");
-              return;
+              updateWidget();
+              break;
             }
 
-            config.slack = { botToken, appToken };
-            saveConfig(config);
-            const slackProvider = new SlackProvider(config.slack, auth);
-            transportManager.addTransport(slackProvider);
-            if (acquireLock()) {
+            case "slack": {
+              const parts2 = token.split(/\s+/);
+              const botToken = parts2[0];
+              const appToken = parts2[1];
+
+              if (!botToken || !appToken) {
+                context.ui.notify("Usage: /msg-bridge configure slack <bot-token> <app-token>", "error");
+                return;
+              }
+
+              fileConfig.slack = { botToken, appToken };
+              saveConfig(fileConfig);
+              const slackProvider = new SlackProvider(fileConfig.slack, auth);
+              transportManager.addTransport(slackProvider);
+              const lockResult = acquireBotLocks(getConfiguredBotLockSpecs({ slack: { botToken, appToken } }));
+              if (!lockResult.ok) {
+                context.ui.notify("✅ Slack configured (that bot is already connected in another pi session — run /msg-bridge connect later)", "info");
+                break;
+              }
               try {
                 await slackProvider.connect();
                 context.ui.notify("✅ Slack configured and connected", "info");
               } catch (err) {
-                releaseLock();
+                releaseBotLocks(lockResult.acquired);
                 context.ui.notify(`⚠️ Slack setup error: ${(err as Error).message}`, "error");
               }
-            } else {
-              context.ui.notify("✅ Slack configured (another instance is connected — run /msg-bridge connect later)", "info");
-            }
-            updateWidget();
-            break;
-          }
-
-          case "discord": {
-            if (!token) {
-              context.ui.notify("Usage: /msg-bridge configure discord <bot-token>", "error");
-              return;
+              updateWidget();
+              break;
             }
 
-            config.discord = { token };
-            saveConfig(config);
-            const discordProvider = new DiscordProvider(config.discord, auth);
-            transportManager.addTransport(discordProvider);
-            if (acquireLock()) {
+            case "discord": {
+              if (!token) {
+                context.ui.notify("Usage: /msg-bridge configure discord <bot-token>", "error");
+                return;
+              }
+
+              fileConfig.discord = { token };
+              saveConfig(fileConfig);
+              const discordProvider = new DiscordProvider(fileConfig.discord, auth);
+              transportManager.addTransport(discordProvider);
+              const lockResult = acquireBotLocks(getConfiguredBotLockSpecs({ discord: { token } }));
+              if (!lockResult.ok) {
+                context.ui.notify("✅ Discord configured (that bot is already connected in another pi session — run /msg-bridge connect later)", "info");
+                break;
+              }
               try {
                 await discordProvider.connect();
                 context.ui.notify("✅ Discord configured and connected", "info");
               } catch (err) {
-                releaseLock();
+                releaseBotLocks(lockResult.acquired);
                 context.ui.notify(`⚠️ Discord setup error: ${(err as Error).message}`, "error");
               }
-            } else {
-              context.ui.notify("✅ Discord configured (another instance is connected — run /msg-bridge connect later)", "info");
-            }
-            updateWidget();
-            break;
-          }
-
-          case "matrix": {
-            const matrixParts = token.split(/\s+/);
-            const homeserverUrl = matrixParts[0];
-            const matrixAccessToken = matrixParts.slice(1).join(" ");
-            if (!homeserverUrl || !matrixAccessToken) {
-              context.ui.notify("Usage: /msg-bridge configure matrix <homeserver-url> <access-token>", "error");
-              return;
+              updateWidget();
+              break;
             }
 
-            config.matrix = { homeserverUrl, accessToken: matrixAccessToken };
-            saveConfig(config);
-            const matrixProvider = new MatrixProvider(config.matrix, auth);
-            transportManager.addTransport(matrixProvider);
-            if (acquireLock()) {
+            case "matrix": {
+              const matrixParts = token.split(/\s+/);
+              const homeserverUrl = matrixParts[0];
+              const matrixAccessToken = matrixParts.slice(1).join(" ");
+              if (!homeserverUrl || !matrixAccessToken) {
+                context.ui.notify("Usage: /msg-bridge configure matrix <homeserver-url> <access-token>", "error");
+                return;
+              }
+
+              fileConfig.matrix = { homeserverUrl, accessToken: matrixAccessToken };
+              saveConfig(fileConfig);
+              const matrixProvider = new MatrixProvider(fileConfig.matrix, auth);
+              transportManager.addTransport(matrixProvider);
+              const lockResult = acquireBotLocks(getConfiguredBotLockSpecs({ matrix: { homeserverUrl, accessToken: matrixAccessToken } }));
+              if (!lockResult.ok) {
+                context.ui.notify("✅ Matrix configured (that bot is already connected in another pi session — run /msg-bridge connect later)", "info");
+                break;
+              }
               try {
                 await matrixProvider.connect();
                 context.ui.notify("✅ Matrix configured and connected", "info");
               } catch (err) {
-                releaseLock();
+                releaseBotLocks(lockResult.acquired);
                 context.ui.notify(`⚠️ Matrix setup error: ${(err as Error).message}`, "error");
               }
-            } else {
-              context.ui.notify("✅ Matrix configured (another instance is connected — run /msg-bridge connect later)", "info");
+              updateWidget();
+              break;
             }
-            updateWidget();
+
+            default:
+              context.ui.notify(`❌ Unknown platform: ${platform}`, "error");
+          }
+          break;
+        }
+
+        case "widget": {
+          if (!ensureWorkspaceAvailable(context.ui)) {
+            return;
+          }
+
+          const cfg = loadFileConfig();
+          cfg.showWidget = cfg.showWidget === false;
+          saveConfig(cfg);
+          const widgetState = cfg.showWidget !== false ? "shown" : "hidden";
+          context.ui.notify(`📊 Status widget ${widgetState}`, "info");
+          updateWidget();
+          break;
+        }
+
+        case "status": {
+          if (!workspaceAvailable) {
+            context.ui.notify(getWorkspaceUnavailableMessage(), "info");
             break;
           }
 
-          default:
-            context.ui.notify(`❌ Unknown platform: ${platform}`, "error");
-        }
-        break;
-      }
+          const stats = auth.getStats();
+          const status = transportManager.getStatus();
+          const lines = [
+            "━━━ Message Bridge Status ━━━",
+            "",
+            "Transports:",
+            ...status.map(
+              (s) => `  ${s.connected ? "●" : "○"} ${s.type}`
+            ),
+            "",
+            `Trusted Users: ${stats.trustedUsers}`,
+          ];
 
-      case "widget": {
-        const cfg2 = loadConfig();
-        cfg2.showWidget = cfg2.showWidget === false;
-        saveConfig(cfg2);
-        const widgetState = cfg2.showWidget !== false ? "shown" : "hidden";
-        context.ui.notify(`📊 Status widget ${widgetState}`, "info");
-        updateWidget();
-        break;
-      }
-
-      case "status": {
-        const stats = auth.getStats();
-        const status = transportManager.getStatus();
-        const lines = [
-          "━━━ Message Bridge Status ━━━",
-          "",
-          "Transports:",
-          ...status.map(
-            (s) => `  ${s.connected ? "●" : "○"} ${s.type}`
-          ),
-          "",
-          `Trusted Users: ${stats.trustedUsers}`,
-        ];
-
-        if (stats.trustedUsers > 0) {
-          for (const [transport, userIds] of Object.entries(stats.usersByTransport)) {
-            if (userIds.length > 0) {
-              lines.push(`  └─ ${transport}: ${userIds.join(", ")}`);
+          if (stats.trustedUsers > 0) {
+            for (const [transport, userIds] of Object.entries(stats.usersByTransport)) {
+              if (userIds.length > 0) {
+                lines.push(`  └─ ${transport}: ${userIds.join(", ")}`);
+              }
             }
           }
+
+          lines.push("");
+          lines.push(`Channels: ${stats.channels}`);
+          lines.push("━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+          context.ui.notify(lines.join("\n"), "info");
+          break;
         }
-
-        lines.push("");
-        lines.push(`Channels: ${stats.channels}`);
-        lines.push("━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-
-        context.ui.notify(lines.join("\n"), "info");
-        break;
+        default:
+          context.ui.notify(`Unknown subcommand: ${subcommand}. Run /msg-bridge help`, "warning");
+          break;
       }
-
       case "toggletools": {
         const cfg3 = loadConfig();
         cfg3.hideToolCalls = !cfg3.hideToolCalls;
@@ -544,10 +640,6 @@ export default function (pi: ExtensionAPI): void {
         context.ui.notify(`🔧 Tool calls ${toolState} in remote messages`, "info");
         break;
       }
-      default:
-        context.ui.notify(`Unknown subcommand: ${subcommand}. Run /msg-bridge help`, "warning");
-        break;
-    }
     },
   });
 }

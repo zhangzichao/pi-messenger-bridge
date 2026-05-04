@@ -1,15 +1,56 @@
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 import type { MsgBridgeConfig } from "./types.js";
 
-const CONFIG_DIR = path.join(os.homedir(), ".pi");
-const CONFIG_PATH = path.join(CONFIG_DIR, "msg-bridge.json");
+const SESSION_ROOT = process.cwd();
+const WORKSPACE_PI_DIR = path.join(SESSION_ROOT, ".pi");
+const WORKSPACE_BRIDGE_DIR = path.join(WORKSPACE_PI_DIR, "msg-bridge");
+const CONFIG_PATH = path.join(WORKSPACE_BRIDGE_DIR, "config.json");
+
+function ensureBridgeDir(): void {
+  if (!fs.existsSync(WORKSPACE_BRIDGE_DIR)) {
+    fs.mkdirSync(WORKSPACE_BRIDGE_DIR, { recursive: true, mode: 0o700 });
+  }
+
+  try {
+    fs.chmodSync(WORKSPACE_BRIDGE_DIR, 0o700);
+  } catch (err) {
+    console.warn("Failed to set msg-bridge directory permissions:", err);
+  }
+}
 
 /**
- * Load config from file and env vars (env vars override file).
+ * Session workspace root (captured once when the extension module loads).
  */
-export function loadConfig(): MsgBridgeConfig {
+export function getSessionRoot(): string {
+  return SESSION_ROOT;
+}
+
+/**
+ * Workspace-local msg-bridge directory.
+ */
+export function getWorkspaceBridgeDir(): string {
+  return WORKSPACE_BRIDGE_DIR;
+}
+
+/**
+ * Workspace-local msg-bridge config path.
+ */
+export function getWorkspaceConfigPath(): string {
+  return CONFIG_PATH;
+}
+
+/**
+ * Default workspace-local WhatsApp auth directory.
+ */
+export function getDefaultWhatsAppAuthPath(): string {
+  return path.join(WORKSPACE_BRIDGE_DIR, "whatsapp-auth");
+}
+
+/**
+ * Load persisted config from the workspace-local file only.
+ */
+export function loadFileConfig(): MsgBridgeConfig {
   const config: MsgBridgeConfig = {};
 
   if (fs.existsSync(CONFIG_PATH)) {
@@ -26,6 +67,15 @@ export function loadConfig(): MsgBridgeConfig {
       console.error("Failed to load config file:", err);
     }
   }
+
+  return config;
+}
+
+/**
+ * Load effective config from file and env vars (env vars override file).
+ */
+export function loadConfig(): MsgBridgeConfig {
+  const config = loadFileConfig();
 
   // Environment variables override file config (higher priority)
   if (process.env.PI_TELEGRAM_TOKEN) {
@@ -54,16 +104,14 @@ export function loadConfig(): MsgBridgeConfig {
 }
 
 /**
- * Save config to file with secure permissions.
+ * Save config to the workspace-local file with secure permissions.
  */
 export function saveConfig(config: MsgBridgeConfig): void {
-  if (!fs.existsSync(CONFIG_DIR)) {
-    fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
-  }
+  ensureBridgeDir();
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
   try {
-    fs.chmodSync(CONFIG_DIR, 0o700);
+    fs.chmodSync(CONFIG_PATH, 0o600);
   } catch (err) {
-    console.warn("Failed to set directory permissions:", err);
+    console.warn("Failed to set config file permissions:", err);
   }
 }

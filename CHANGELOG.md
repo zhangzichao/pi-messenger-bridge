@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Empty-message guard in all transports (Discord, Telegram, Slack, WhatsApp, Matrix) to prevent provider errors on whitespace-only payloads
 
 ### Changed
+- Moved msg-bridge config to workspace-local `.pi/msg-bridge/config.json`
+- Added workspace ownership lock (`.pi/msg-bridge/session.lock`) so only one pi session can use bridge state in a workspace
+- Replaced the global single-instance guard with global per-bot locks under `~/.pi/msg-bridge/locks/`
+- Made the default WhatsApp auth path workspace-local: `.pi/msg-bridge/whatsapp-auth`
+- Kept env var overrides runtime-only so widget/auth/autoconnect updates do not persist env-provided bot tokens into config files
 - Tool call summaries now wrap the tool name in inline-code backticks (`🔧 \`hud_canvas\` (...)`), rendering as code across all 5 transports and avoiding Telegram's underscore-escape backslashes leaking into messages
 - Migrated peer dependencies from deprecated `@mariozechner/pi-{ai,coding-agent,tui}` to `@earendil-works/pi-{ai,coding-agent,tui}` (>=0.74). The `@mariozechner` packages were deprecated upstream with the message "please use @earendil-works/pi-coding-agent instead going forward"
 - Tightened peer constraints from `*` to `>=0.74` and removed the duplicated entries from devDependencies (npm auto-installs peers in dev)

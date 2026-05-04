@@ -28,6 +28,7 @@ Thumbs.db
 *.tmp
 .temp/
 .pi/readcache
+.pi/msg-bridge/
 .claude
 .vscode
 .pi-lens/

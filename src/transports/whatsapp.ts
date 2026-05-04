@@ -1,7 +1,7 @@
 import * as fs from "fs";
-import * as path from "path";
 import * as qrcode from "qrcode-terminal";
 import type { ChallengeAuth } from "../auth/challenge-auth.js";
+import { getDefaultWhatsAppAuthPath } from "../config.js";
 import type { ExternalMessage } from "../types.js";
 import type { ITransportProvider } from "./interface.js";
 
@@ -30,12 +30,8 @@ export class WhatsAppProvider implements ITransportProvider {
   constructor(config: { authPath?: string; debug?: boolean },
     private auth: ChallengeAuth
   ) {
-    // Default auth path to ~/.pi/msg-bridge-whatsapp-auth
-    this.authPath = config.authPath || path.join(
-      process.env.HOME || process.env.USERPROFILE || ".",
-      ".pi",
-      "msg-bridge-whatsapp-auth"
-    );
+    // Default auth path to the workspace-local msg-bridge directory
+    this.authPath = config.authPath || getDefaultWhatsAppAuthPath();
     this.debug = config.debug || false;
   }
 

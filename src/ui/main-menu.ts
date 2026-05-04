@@ -5,8 +5,8 @@
  */
 
 import type { ChallengeAuth } from "../auth/challenge-auth.js";
-import { loadConfig, saveConfig } from "../config.js";
-import { acquireLock, releaseLock } from "../lock.js";
+import { getDefaultWhatsAppAuthPath, loadConfig, loadFileConfig, saveConfig } from "../config.js";
+import { acquireBotLocks, getConfiguredBotLockSpecs, releaseAllOwnedBotLocks, releaseBotLocks } from "../lock.js";
 import { DiscordProvider } from "../transports/discord.js";
 import type { TransportManager } from "../transports/manager.js";
 import { MatrixProvider } from "../transports/matrix.js";
@@ -27,6 +27,8 @@ export interface MenuContext {
   transportManager: TransportManager;
   auth: ChallengeAuth;
   updateWidget: () => void;
+  isBridgeAvailable: () => boolean;
+  getUnavailableMessage: () => string;
 }
 
 // ── Status ──────────────────────────────────────────────────────────────────
@@ -46,6 +48,12 @@ function getStatusLine(mctx: MenuContext): string {
   return `${transportLines}\n  Trusted users: ${stats.trustedUsers}`;
 }
 
+function ensureBridgeAvailable(mctx: MenuContext): boolean {
+  if (mctx.isBridgeAvailable()) return true;
+  mctx.ui.notify(mctx.getUnavailableMessage(), "warning");
+  return false;
+}
+
 // ── Help ────────────────────────────────────────────────────────────────────
 
 function showHelp(mctx: MenuContext): void {
@@ -63,27 +71,33 @@ function showHelp(mctx: MenuContext): void {
 // ── Actions ─────────────────────────────────────────────────────────────────
 
 async function doConnect(mctx: MenuContext): Promise<void> {
-  if (!acquireLock()) {
-    mctx.ui.notify("⚠️ Another instance is already connected.", "warning");
+  if (!ensureBridgeAvailable(mctx)) return;
+
+  const lockResult = acquireBotLocks(getConfiguredBotLockSpecs(loadConfig()));
+  if (!lockResult.ok) {
+    mctx.ui.notify(`⚠️ ${lockResult.failed.label} is already connected in another pi session. Disconnect it there first.`, "warning");
     return;
   }
+
   try {
     await mctx.transportManager.connectAll();
-    const cfg = loadConfig();
+    const cfg = loadFileConfig();
     cfg.autoConnect = true;
     saveConfig(cfg);
     mctx.ui.notify("✅ Connected to all configured transports", "info");
     mctx.updateWidget();
   } catch (err) {
-    releaseLock();
+    releaseBotLocks(lockResult.acquired);
     mctx.ui.notify(`❌ Connection failed: ${(err as Error).message}`, "error");
   }
 }
 
 async function doDisconnect(mctx: MenuContext): Promise<void> {
+  if (!ensureBridgeAvailable(mctx)) return;
+
   await mctx.transportManager.disconnectAll();
-  releaseLock();
-  const cfg = loadConfig();
+  releaseAllOwnedBotLocks();
+  const cfg = loadFileConfig();
   cfg.autoConnect = false;
   saveConfig(cfg);
   mctx.ui.notify("🔌 Disconnected from all transports", "info");
@@ -91,6 +105,8 @@ async function doDisconnect(mctx: MenuContext): Promise<void> {
 }
 
 async function doConfigure(mctx: MenuContext): Promise<void> {
+  if (!ensureBridgeAvailable(mctx)) return;
+
   const platform = await mctx.ui.select("Configure transport", [
     "Telegram",
     "WhatsApp",
@@ -100,47 +116,59 @@ async function doConfigure(mctx: MenuContext): Promise<void> {
   ]);
   if (!platform) return;
 
-  const config = loadConfig();
+  const fileConfig = loadFileConfig();
+  const effectiveConfig = loadConfig();
 
   switch (platform) {
     case "Telegram": {
       const token = await mctx.ui.input("Telegram bot token");
       if (!token) return;
-      config.telegram = { token };
-      saveConfig(config);
+      fileConfig.telegram = { token };
+      saveConfig(fileConfig);
       const provider = new TelegramProvider(token, mctx.auth);
       mctx.transportManager.addTransport(provider);
-      if (acquireLock()) {
-        try {
-          await provider.connect();
-          mctx.ui.notify("✅ Telegram configured and connected", "info");
-        } catch (_err) {
-          releaseLock();
-          mctx.ui.notify("✅ Telegram configured (run /msg-bridge connect to activate)", "info");
-        }
-      } else {
-        mctx.ui.notify("✅ Telegram configured (another instance is connected — run /msg-bridge connect later)", "info");
+
+      const lockResult = acquireBotLocks(getConfiguredBotLockSpecs({ telegram: { token } }));
+      if (!lockResult.ok) {
+        mctx.ui.notify("✅ Telegram configured (that bot is already connected in another pi session — run /msg-bridge connect later)", "info");
+        break;
+      }
+
+      try {
+        await provider.connect();
+        mctx.ui.notify("✅ Telegram configured and connected", "info");
+      } catch (_err) {
+        releaseBotLocks(lockResult.acquired);
+        mctx.ui.notify("✅ Telegram configured (run /msg-bridge connect to activate)", "info");
       }
       break;
     }
     case "WhatsApp": {
-      const authPath = await mctx.ui.input("Auth path (enter for default, esc to cancel)");
+      const authPath = await mctx.ui.input(`Auth path (enter for default: ${getDefaultWhatsAppAuthPath()}, esc to cancel)`);
       if (authPath === undefined) return; // cancelled
-      config.whatsapp = authPath ? { authPath } : {};
-      saveConfig(config);
-      const whatsappConfig = { ...config.whatsapp, debug: config.debug };
+
+      fileConfig.whatsapp = authPath ? { authPath } : {};
+      saveConfig(fileConfig);
+      const whatsappConfig = {
+        ...fileConfig.whatsapp,
+        authPath: fileConfig.whatsapp?.authPath || getDefaultWhatsAppAuthPath(),
+        debug: effectiveConfig.debug,
+      };
       const provider = new WhatsAppProvider(whatsappConfig, mctx.auth);
       mctx.transportManager.addTransport(provider);
-      if (acquireLock()) {
-        try {
-          await provider.connect(true);
-          mctx.ui.notify("✅ WhatsApp configured and connecting (scan QR code in terminal)...", "info");
-        } catch (err) {
-          releaseLock();
-          mctx.ui.notify(`⚠️ WhatsApp setup error: ${(err as Error).message}`, "error");
-        }
-      } else {
-        mctx.ui.notify("✅ WhatsApp configured (another instance is connected — run /msg-bridge connect later)", "info");
+
+      const lockResult = acquireBotLocks(getConfiguredBotLockSpecs({ whatsapp: { authPath: whatsappConfig.authPath } }));
+      if (!lockResult.ok) {
+        mctx.ui.notify("✅ WhatsApp configured (that session is already connected in another pi session — run /msg-bridge connect later)", "info");
+        break;
+      }
+
+      try {
+        await provider.connect(true);
+        mctx.ui.notify("✅ WhatsApp configured and connecting (scan QR code in terminal)...", "info");
+      } catch (err) {
+        releaseBotLocks(lockResult.acquired);
+        mctx.ui.notify(`⚠️ WhatsApp setup error: ${(err as Error).message}`, "error");
       }
       break;
     }
@@ -149,40 +177,47 @@ async function doConfigure(mctx: MenuContext): Promise<void> {
       if (!botToken) return;
       const appToken = await mctx.ui.input("Slack app token (xapp-...)");
       if (!appToken) return;
-      config.slack = { botToken, appToken };
-      saveConfig(config);
-      const provider = new SlackProvider(config.slack, mctx.auth);
+
+      fileConfig.slack = { botToken, appToken };
+      saveConfig(fileConfig);
+      const provider = new SlackProvider(fileConfig.slack, mctx.auth);
       mctx.transportManager.addTransport(provider);
-      if (acquireLock()) {
-        try {
-          await provider.connect();
-          mctx.ui.notify("✅ Slack configured and connected", "info");
-        } catch (err) {
-          releaseLock();
-          mctx.ui.notify(`⚠️ Slack setup error: ${(err as Error).message}`, "error");
-        }
-      } else {
-        mctx.ui.notify("✅ Slack configured (another instance is connected — run /msg-bridge connect later)", "info");
+
+      const lockResult = acquireBotLocks(getConfiguredBotLockSpecs({ slack: { botToken, appToken } }));
+      if (!lockResult.ok) {
+        mctx.ui.notify("✅ Slack configured (that bot is already connected in another pi session — run /msg-bridge connect later)", "info");
+        break;
+      }
+
+      try {
+        await provider.connect();
+        mctx.ui.notify("✅ Slack configured and connected", "info");
+      } catch (err) {
+        releaseBotLocks(lockResult.acquired);
+        mctx.ui.notify(`⚠️ Slack setup error: ${(err as Error).message}`, "error");
       }
       break;
     }
     case "Discord": {
       const token = await mctx.ui.input("Discord bot token");
       if (!token) return;
-      config.discord = { token };
-      saveConfig(config);
-      const provider = new DiscordProvider(config.discord, mctx.auth);
+      fileConfig.discord = { token };
+      saveConfig(fileConfig);
+      const provider = new DiscordProvider(fileConfig.discord, mctx.auth);
       mctx.transportManager.addTransport(provider);
-      if (acquireLock()) {
-        try {
-          await provider.connect();
-          mctx.ui.notify("✅ Discord configured and connected", "info");
-        } catch (err) {
-          releaseLock();
-          mctx.ui.notify(`⚠️ Discord setup error: ${(err as Error).message}`, "error");
-        }
-      } else {
-        mctx.ui.notify("✅ Discord configured (another instance is connected — run /msg-bridge connect later)", "info");
+
+      const lockResult = acquireBotLocks(getConfiguredBotLockSpecs({ discord: { token } }));
+      if (!lockResult.ok) {
+        mctx.ui.notify("✅ Discord configured (that bot is already connected in another pi session — run /msg-bridge connect later)", "info");
+        break;
+      }
+
+      try {
+        await provider.connect();
+        mctx.ui.notify("✅ Discord configured and connected", "info");
+      } catch (err) {
+        releaseBotLocks(lockResult.acquired);
+        mctx.ui.notify(`⚠️ Discord setup error: ${(err as Error).message}`, "error");
       }
       break;
     }
@@ -213,7 +248,9 @@ async function doConfigure(mctx: MenuContext): Promise<void> {
 }
 
 function doToggleWidget(mctx: MenuContext): void {
-  const cfg = loadConfig();
+  if (!ensureBridgeAvailable(mctx)) return;
+
+  const cfg = loadFileConfig();
   cfg.showWidget = cfg.showWidget === false;
   saveConfig(cfg);
   const state = cfg.showWidget !== false ? "shown" : "hidden";
@@ -224,6 +261,10 @@ function doToggleWidget(mctx: MenuContext): void {
 // ── Main menu ───────────────────────────────────────────────────────────────
 
 export async function openMainMenu(mctx: MenuContext): Promise<void> {
+  if (!ensureBridgeAvailable(mctx)) {
+    return;
+  }
+
   const mainMenu = async (): Promise<void> => {
     const statusLine = getStatusLine(mctx);
     const title = `Message Bridge\n${statusLine}`;

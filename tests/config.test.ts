@@ -4,11 +4,14 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 
 describe('config', () => {
-  let tmpDir: string;
+  let tmpWorkspace: string;
+  let originalCwd: string;
   const originalEnv = { ...process.env };
 
   beforeEach(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), 'msg-bridge-config-'));
+    originalCwd = process.cwd();
+    tmpWorkspace = mkdtempSync(join(tmpdir(), 'msg-bridge-workspace-'));
+    process.chdir(tmpWorkspace);
     delete process.env.PI_TELEGRAM_TOKEN;
     delete process.env.PI_WHATSAPP_AUTH_PATH;
     delete process.env.PI_SLACK_BOT_TOKEN;
@@ -18,15 +21,12 @@ describe('config', () => {
   });
 
   afterEach(() => {
+    process.chdir(originalCwd);
     process.env = { ...originalEnv };
-    rmSync(tmpDir, { recursive: true, force: true });
+    rmSync(tmpWorkspace, { recursive: true, force: true });
   });
 
   async function importConfig() {
-    vi.doMock('os', async () => {
-      const actual = await vi.importActual<typeof import('os')>('os');
-      return { ...actual, homedir: () => tmpDir };
-    });
     return await import('../src/config');
   }
 
@@ -35,8 +35,8 @@ describe('config', () => {
     expect(loadConfig()).toEqual({});
   });
 
-  it('saves and loads config roundtrip', async () => {
-    const { loadConfig, saveConfig } = await importConfig();
+  it('saves and loads config roundtrip from the workspace-local file', async () => {
+    const { getWorkspaceConfigPath, loadConfig, saveConfig } = await importConfig();
 
     saveConfig({ telegram: { token: 'test-token' }, autoConnect: true, debug: false });
     const loaded = loadConfig();
@@ -44,21 +44,22 @@ describe('config', () => {
     expect(loaded.telegram?.token).toBe('test-token');
     expect(loaded.autoConnect).toBe(true);
     expect(loaded.debug).toBe(false);
+    expect(getWorkspaceConfigPath()).toBe(join(tmpWorkspace, '.pi', 'msg-bridge', 'config.json'));
   });
 
-  it('creates .pi directory with 700 permissions', async () => {
+  it('creates the workspace-local msg-bridge directory with 700 permissions', async () => {
     const { saveConfig } = await importConfig();
     saveConfig({});
 
-    const stats = statSync(join(tmpDir, '.pi'));
+    const stats = statSync(join(tmpWorkspace, '.pi', 'msg-bridge'));
     expect(stats.mode & 0o777).toBe(0o700);
   });
 
-  it('writes config file with 600 permissions', async () => {
+  it('writes the workspace-local config file with 600 permissions', async () => {
     const { saveConfig } = await importConfig();
     saveConfig({});
 
-    const stats = statSync(join(tmpDir, '.pi', 'msg-bridge.json'));
+    const stats = statSync(join(tmpWorkspace, '.pi', 'msg-bridge', 'config.json'));
     expect(stats.mode & 0o777).toBe(0o600);
   });
 
@@ -70,7 +71,6 @@ describe('config', () => {
 
     const loaded = loadConfig();
     expect(loaded.telegram?.token).toBe('env-token');
-    // Non-overridden fields survive
     expect(loaded.autoConnect).toBe(true);
   });
 
@@ -91,21 +91,31 @@ describe('config', () => {
     expect(config.discord?.token).toBe('dc-token');
   });
 
+  it('does not mix env-provided transport credentials into file-only config reads', async () => {
+    process.env.PI_SLACK_BOT_TOKEN = 'xoxb-test';
+    process.env.PI_SLACK_APP_TOKEN = 'xapp-test';
+
+    const { loadConfig, loadFileConfig, saveConfig } = await importConfig();
+    saveConfig({ autoConnect: true });
+
+    expect(loadFileConfig().slack).toBeUndefined();
+    expect(loadFileConfig().autoConnect).toBe(true);
+    expect(loadConfig().slack).toEqual({ botToken: 'xoxb-test', appToken: 'xapp-test' });
+  });
+
   it('handles corrupted config file gracefully', async () => {
-    const piDir = join(tmpDir, '.pi');
-    mkdirSync(piDir, { recursive: true });
-    writeFileSync(join(piDir, 'msg-bridge.json'), '{invalid json!!!');
+    const bridgeDir = join(tmpWorkspace, '.pi', 'msg-bridge');
+    mkdirSync(bridgeDir, { recursive: true });
+    writeFileSync(join(bridgeDir, 'config.json'), '{invalid json!!!');
 
     const { loadConfig } = await importConfig();
-    // Should not throw, returns empty config
-    const config = loadConfig();
-    expect(config).toEqual({});
+    expect(loadConfig()).toEqual({});
   });
 
   it('still applies env vars when config file is corrupted', async () => {
-    const piDir = join(tmpDir, '.pi');
-    mkdirSync(piDir, { recursive: true });
-    writeFileSync(join(piDir, 'msg-bridge.json'), 'not json');
+    const bridgeDir = join(tmpWorkspace, '.pi', 'msg-bridge');
+    mkdirSync(bridgeDir, { recursive: true });
+    writeFileSync(join(bridgeDir, 'config.json'), 'not json');
 
     process.env.PI_TELEGRAM_TOKEN = 'env-token';
 
@@ -115,7 +125,6 @@ describe('config', () => {
   });
 
   it('requires both Slack tokens for slack config', async () => {
-    // Only bot token — should not set slack
     process.env.PI_SLACK_BOT_TOKEN = 'xoxb-test';
 
     const { loadConfig } = await importConfig();
@@ -135,5 +144,16 @@ describe('config', () => {
   it('hideToolCalls defaults to undefined (not hidden)', async () => {
     const { loadConfig } = await importConfig();
     expect(loadConfig().hideToolCalls).toBeUndefined();
+  });
+
+  it('resolves the default WhatsApp auth path inside the workspace', async () => {
+    const { getDefaultWhatsAppAuthPath } = await importConfig();
+    expect(getDefaultWhatsAppAuthPath()).toBe(join(tmpWorkspace, '.pi', 'msg-bridge', 'whatsapp-auth'));
+  });
+
+  it('does not create config until saveConfig is called', async () => {
+    const { getWorkspaceConfigPath, loadConfig } = await importConfig();
+    expect(loadConfig()).toEqual({});
+    expect(existsSync(getWorkspaceConfigPath())).toBe(false);
   });
 });

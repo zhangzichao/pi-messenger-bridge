@@ -13,7 +13,7 @@ https://github.com/user-attachments/assets/cd64360e-e8cd-4820-a67f-bd127c5d6035
 - 📱 Multi-messenger support (Telegram, WhatsApp, Slack, Discord, Matrix)
 - 🔐 Challenge-based authentication (6-digit codes)
 - 🎛️ Interactive menu (`/msg-bridge`) for setup and management
-- 🔒 Single-instance guard — prevents duplicate bot polling with sub-agents
+- 🔒 Workspace ownership lock + per-bot connection locks
 - 📊 Live status widget (toggleable)
 - 💾 Persistent config (auth state, auto-connect, widget preference)
 - 🔧 Tool call visibility for remote users
@@ -154,7 +154,8 @@ Trusted users can DM the bot directly to manage state. Reply with `/help` for th
 
 ## Configuration
 
-Config is stored at `~/.pi/msg-bridge.json` with secure permissions (chmod 600).
+Config is stored per workspace at `<project>/.pi/msg-bridge/config.json` with secure permissions (chmod 600).
+Add `.pi/msg-bridge/` to your `.gitignore` if the workspace is a git repository.
 
 Example config:
 ```json
@@ -179,7 +180,7 @@ Example config:
 Environment variables override file config:
 
 - `PI_TELEGRAM_TOKEN` — Telegram bot token
-- `PI_WHATSAPP_AUTH_PATH` — WhatsApp session directory (default: `~/.pi/msg-bridge-whatsapp-auth`)
+- `PI_WHATSAPP_AUTH_PATH` — WhatsApp session directory (default: `<project>/.pi/msg-bridge/whatsapp-auth`)
 - `PI_SLACK_BOT_TOKEN` — Slack bot token (xoxb-...)
 - `PI_SLACK_APP_TOKEN` — Slack app token (xapp-...)
 - `PI_DISCORD_TOKEN` — Discord bot token
@@ -189,9 +190,11 @@ Environment variables override file config:
 
 ## Security
 
-- Config file: `~/.pi/msg-bridge.json` (chmod 600 - owner read/write only)
-- Config directory: `~/.pi/` (chmod 700 - owner only)
-- WhatsApp auth: `~/.pi/msg-bridge-whatsapp-auth/` (chmod 700 - owner only)
+- Config file: `<project>/.pi/msg-bridge/config.json` (chmod 600 - owner read/write only)
+- Workspace bridge directory: `<project>/.pi/msg-bridge/` (chmod 700 - owner only)
+- Workspace lock: `<project>/.pi/msg-bridge/session.lock`
+- Global bot locks: `~/.pi/msg-bridge/locks/*.lock`
+- WhatsApp auth: `<project>/.pi/msg-bridge/whatsapp-auth/` (chmod 700 - owner only)
 - Environment variables take precedence over config file
 - Challenge-based authentication for all new users
 - Transport-namespaced user IDs prevent impersonation
@@ -216,8 +219,9 @@ export MSG_BRIDGE_DEBUG=true
 Uses pi's native `sendUserMessage()` and `turn_end` events for two-way communication.
 No tool-loop hacks needed — this is the pi-native way.
 
-Single-instance connection guard prevents duplicate polling when sub-agents spawn
-(global flag + PID lock file at `~/.pi/msg-bridge.lock`).
+The bridge uses two lock layers:
+- a workspace ownership lock at `<project>/.pi/msg-bridge/session.lock` so only one pi session can use the workspace-local bridge state
+- global per-bot locks at `~/.pi/msg-bridge/locks/*.lock` so the same bot cannot connect from multiple sessions (including sub-agents)
 
 ## Development
 
