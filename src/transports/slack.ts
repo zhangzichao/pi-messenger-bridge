@@ -21,6 +21,7 @@ export class SlackProvider implements ITransportProvider {
   private messageHandler?: (message: ExternalMessage) => void;
   private errorHandler?: (error: Error) => void;
   private lastProcessedMessageId = "";
+  private warnedMissingUsersReadScope = false;
   
   // Cache user info to avoid repeated API calls
   private userCache: Map<string, string> = new Map();
@@ -34,6 +35,40 @@ export class SlackProvider implements ITransportProvider {
 
   get isConnected(): boolean {
     return this._isConnected;
+  }
+
+  private extractDisplayName(user: any): string | undefined {
+    const candidates = [
+      user?.profile?.display_name,
+      user?.profile?.display_name_normalized,
+      user?.profile?.real_name,
+      user?.real_name,
+      user?.name,
+    ];
+
+    for (const candidate of candidates) {
+      if (typeof candidate === "string" && candidate.trim().length > 0) {
+        return candidate.trim();
+      }
+    }
+
+    return undefined;
+  }
+
+  private extractMessageUsername(message: any): string | undefined {
+    const candidates = [
+      message?.user_profile?.display_name,
+      message?.user_profile?.real_name,
+      message?.username,
+    ];
+
+    for (const candidate of candidates) {
+      if (typeof candidate === "string" && candidate.trim().length > 0) {
+        return candidate.trim();
+      }
+    }
+
+    return undefined;
   }
 
   async connect(): Promise<void> {
@@ -87,17 +122,26 @@ export class SlackProvider implements ITransportProvider {
       this.lastProcessedMessageId = ts;
 
       // Get username from cache or fetch
-      let username: string = this.userCache.get(userId) || userId;
+      let username: string = this.userCache.get(userId) || this.extractMessageUsername(message) || userId;
       if (!this.userCache.has(userId)) {
-        try {
-          const userInfo = await client.users.info({ user: userId });
-          const fetchedName = userInfo.user?.real_name || userInfo.user?.name;
-          if (fetchedName) {
-            username = fetchedName;
+        const hintedName = this.extractMessageUsername(message);
+        if (hintedName) {
+          username = hintedName;
+          this.userCache.set(userId, username);
+        } else {
+          try {
+            const userInfo = await client.users.info({ user: userId });
+            const fetchedName = this.extractDisplayName(userInfo.user);
+            username = fetchedName || userId;
+            this.userCache.set(userId, username);
+          } catch (error: any) {
+            if (!this.warnedMissingUsersReadScope && error?.data?.error === "missing_scope") {
+              this.warnedMissingUsersReadScope = true;
+              console.warn("[Slack] users.info is missing scope. Add users:read and reinstall the app to show human-friendly usernames.");
+            }
+            username = userId;
             this.userCache.set(userId, username);
           }
-        } catch {
-          username = userId;
         }
       }
 
@@ -109,7 +153,7 @@ export class SlackProvider implements ITransportProvider {
           const conv = convInfo.channel;
           // is_im = direct message, is_mpim = multi-party DM
           const isDM = conv?.is_im === true || conv?.is_mpim === true;
-          const name = conv?.name || (isDM ? "DM" : channelId);
+          const name = typeof conv?.name === "string" ? conv.name : undefined;
           channelInfo = { isDM, name };
           this.channelCache.set(channelId, channelInfo);
         } catch {
@@ -168,6 +212,7 @@ export class SlackProvider implements ITransportProvider {
       if (this.messageHandler) {
         const externalMessage: ExternalMessage = {
           chatId: channelId,
+          chatName: isGroupChat ? channelInfo.name : undefined,
           transport: this.type,
           content: text.trim(),
           username: username,

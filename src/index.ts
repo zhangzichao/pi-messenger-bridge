@@ -183,7 +183,15 @@ export default function (pi: ExtensionAPI): void {
         messageId: msg.messageId,
       };
 
-      const taggedMessage = `📱 @${msg.username} via ${msg.transport}: ${msg.content}`;
+      const marker = !msg.isGroupChat ? "D" : msg.wasMentioned ? "C-M" : "C";
+      const chatLabel = msg.isGroupChat
+        ? msg.chatName
+          ? `${msg.chatName}, id=${msg.chatId}`
+          : `id=${msg.chatId}`
+        : undefined;
+      const taggedMessage = chatLabel
+        ? `📱 [${marker}] @${msg.username} via ${msg.transport} (${chatLabel}): ${msg.content}`
+        : `📱 [${marker}] @${msg.username} via ${msg.transport}: ${msg.content}`;
       pi.sendUserMessage(taggedMessage, { deliverAs: "followUp" });
     });
 

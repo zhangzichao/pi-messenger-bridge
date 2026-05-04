@@ -4,6 +4,8 @@
 export interface ExternalMessage {
   /** Unique chat/channel identifier */
   chatId: string;
+  /** Human-friendly chat/channel name when available */
+  chatName?: string;
   /** Transport type (telegram, whatsapp, etc) */
   transport: string;
   /** Message content/text */

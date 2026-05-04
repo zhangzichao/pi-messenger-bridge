@@ -192,6 +192,7 @@ export class TelegramProvider implements ITransportProvider {
     if (this.messageHandler && content) {
       const externalMessage: ExternalMessage = {
         chatId,
+        chatName: isGroupChat ? (msg.chat.title || msg.chat.username) : undefined,
         transport: this.type,
         content,
         username,

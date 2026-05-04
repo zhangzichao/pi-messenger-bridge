@@ -272,6 +272,7 @@ export class WhatsAppProvider implements ITransportProvider {
     if (this.messageHandler) {
       const externalMessage: ExternalMessage = {
         chatId,
+        chatName: undefined,
         transport: this.type,
         content: text.trim(),
         username: pushName,

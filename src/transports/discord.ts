@@ -86,6 +86,7 @@ export class DiscordProvider implements ITransportProvider {
 
       const userId = message.author.id;
       const chatId = message.channelId;
+      const chatName = !isDM && typeof message.channel?.name === "string" ? message.channel.name : undefined;
       const username = message.author.username;
       const text = message.content.trim();
       const isGroupChat = !isDM;
@@ -132,6 +133,7 @@ export class DiscordProvider implements ITransportProvider {
       if (this.messageHandler) {
         const externalMessage: ExternalMessage = {
           chatId,
+          chatName,
           transport: this.type,
           content: text,
           username: username,
