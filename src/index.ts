@@ -183,7 +183,7 @@ export default function (pi: ExtensionAPI): void {
         messageId: msg.messageId,
       };
 
-      const taggedMessage = `[📱 @${msg.username} via ${msg.transport}]: ${msg.content}`;
+      const taggedMessage = `📱 @${msg.username} via ${msg.transport}: ${msg.content}`;
       pi.sendUserMessage(taggedMessage, { deliverAs: "followUp" });
     });
 
