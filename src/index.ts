@@ -15,6 +15,7 @@ import {
   releaseWorkspaceLock,
 } from "./lock.js";
 import { DiscordProvider } from "./transports/discord.js";
+import type { ITransportProvider } from "./transports/interface.js";
 import { TransportManager } from "./transports/manager.js";
 import { MatrixProvider } from "./transports/matrix.js";
 import { SlackProvider } from "./transports/slack.js";
@@ -92,6 +93,28 @@ export default function (pi: ExtensionAPI): void {
     const config = loadFileConfig();
     config.auth = auth.exportConfig();
     saveConfig(config);
+  }
+
+  async function replaceConfiguredTransport(
+    transport: ITransportProvider,
+    previousConfig: MsgBridgeConfig,
+    ui: ExtensionContext["ui"],
+  ): Promise<boolean> {
+    try {
+      const replaced = await transportManager.replaceTransport(transport);
+      if (replaced) {
+        releaseBotLocks(
+          getConfiguredBotLockSpecs(previousConfig).filter((spec) => spec.transport === transport.type),
+        );
+      }
+      return true;
+    } catch (err) {
+      ui.notify(
+        `❌ Failed to disconnect existing ${transport.type} transport: ${(err as Error).message}`,
+        "error",
+      );
+      return false;
+    }
   }
 
   async function connectConfiguredTransports(ui: ExtensionContext["ui"]): Promise<boolean> {
@@ -442,10 +465,12 @@ export default function (pi: ExtensionAPI): void {
                 context.ui.notify("Usage: /msg-bridge configure telegram <bot-token>", "error");
                 return;
               }
+              const telegramProvider = new TelegramProvider(token, auth);
+              if (!(await replaceConfiguredTransport(telegramProvider, effectiveConfig, context.ui))) {
+                break;
+              }
               fileConfig.telegram = { token };
               saveConfig(fileConfig);
-              const telegramProvider = new TelegramProvider(token, auth);
-              transportManager.addTransport(telegramProvider);
               const lockResult = acquireBotLocks(getConfiguredBotLockSpecs({ telegram: { token } }));
               if (!lockResult.ok) {
                 context.ui.notify("✅ Telegram configured (that bot is already connected in another pi session — run /msg-bridge connect later)", "info");
@@ -463,16 +488,19 @@ export default function (pi: ExtensionAPI): void {
             }
 
             case "whatsapp": {
-              fileConfig.whatsapp = token ? { authPath: token } : {};
-              saveConfig(fileConfig);
-              const whatsappAuthPath = fileConfig.whatsapp.authPath || getDefaultWhatsAppAuthPath();
+              const nextWhatsAppConfig = token ? { authPath: token } : {};
+              const whatsappAuthPath = nextWhatsAppConfig.authPath || getDefaultWhatsAppAuthPath();
               const whatsappConfig = {
-                ...fileConfig.whatsapp,
+                ...nextWhatsAppConfig,
                 authPath: whatsappAuthPath,
                 debug: effectiveConfig.debug,
               };
               const whatsappProvider = new WhatsAppProvider(whatsappConfig, auth);
-              transportManager.addTransport(whatsappProvider);
+              if (!(await replaceConfiguredTransport(whatsappProvider, effectiveConfig, context.ui))) {
+                break;
+              }
+              fileConfig.whatsapp = nextWhatsAppConfig;
+              saveConfig(fileConfig);
               const lockResult = acquireBotLocks(getConfiguredBotLockSpecs({ whatsapp: { authPath: whatsappAuthPath } }));
               if (!lockResult.ok) {
                 context.ui.notify("✅ WhatsApp configured (that session is already connected in another pi session — run /msg-bridge connect later)", "info");
@@ -499,10 +527,12 @@ export default function (pi: ExtensionAPI): void {
                 return;
               }
 
+              const slackProvider = new SlackProvider({ botToken, appToken }, auth);
+              if (!(await replaceConfiguredTransport(slackProvider, effectiveConfig, context.ui))) {
+                break;
+              }
               fileConfig.slack = { botToken, appToken };
               saveConfig(fileConfig);
-              const slackProvider = new SlackProvider(fileConfig.slack, auth);
-              transportManager.addTransport(slackProvider);
               const lockResult = acquireBotLocks(getConfiguredBotLockSpecs({ slack: { botToken, appToken } }));
               if (!lockResult.ok) {
                 context.ui.notify("✅ Slack configured (that bot is already connected in another pi session — run /msg-bridge connect later)", "info");
@@ -525,10 +555,12 @@ export default function (pi: ExtensionAPI): void {
                 return;
               }
 
+              const discordProvider = new DiscordProvider({ token }, auth);
+              if (!(await replaceConfiguredTransport(discordProvider, effectiveConfig, context.ui))) {
+                break;
+              }
               fileConfig.discord = { token };
               saveConfig(fileConfig);
-              const discordProvider = new DiscordProvider(fileConfig.discord, auth);
-              transportManager.addTransport(discordProvider);
               const lockResult = acquireBotLocks(getConfiguredBotLockSpecs({ discord: { token } }));
               if (!lockResult.ok) {
                 context.ui.notify("✅ Discord configured (that bot is already connected in another pi session — run /msg-bridge connect later)", "info");

@@ -71,3 +71,30 @@ describe('TransportManager.connectAll', () => {
     expect(telegram.isConnected).toBe(true);
   });
 });
+
+describe('TransportManager.replaceTransport', () => {
+  it('disconnects the previous provider before replacing it', async () => {
+    const manager = new TransportManager();
+    const firstSlack = new FakeTransport('slack', { initiallyConnected: true });
+    const secondSlack = new FakeTransport('slack');
+
+    manager.addTransport(firstSlack);
+
+    const replaced = await manager.replaceTransport(secondSlack);
+
+    expect(replaced).toBe(firstSlack);
+    expect(firstSlack.disconnectCalls).toBe(1);
+    expect(firstSlack.isConnected).toBe(false);
+    expect(manager.getTransport('slack')).toBe(secondSlack);
+  });
+
+  it('just registers the provider when no previous transport exists', async () => {
+    const manager = new TransportManager();
+    const slack = new FakeTransport('slack');
+
+    const replaced = await manager.replaceTransport(slack);
+
+    expect(replaced).toBeUndefined();
+    expect(manager.getTransport('slack')).toBe(slack);
+  });
+});

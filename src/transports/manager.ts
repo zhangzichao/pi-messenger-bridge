@@ -10,7 +10,7 @@ export class TransportManager {
   private errorHandler?: (error: Error, transport: string) => void;
 
   /**
-   * Register a transport provider
+   * Register a transport provider.
    */
   addTransport(transport: ITransportProvider): void {
     this.transports.set(transport.type, transport);
@@ -28,6 +28,23 @@ export class TransportManager {
         this.errorHandler(err, transport.type);
       }
     });
+  }
+
+  /**
+   * Replace an existing transport of the same type.
+   *
+   * The previous provider is disconnected before the replacement is registered
+   * so reconfiguration cannot orphan a live connection.
+   */
+  async replaceTransport(transport: ITransportProvider): Promise<ITransportProvider | undefined> {
+    const existing = this.transports.get(transport.type);
+
+    if (existing && existing !== transport) {
+      await existing.disconnect();
+    }
+
+    this.addTransport(transport);
+    return existing && existing !== transport ? existing : undefined;
   }
 
   /**

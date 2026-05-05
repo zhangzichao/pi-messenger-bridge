@@ -8,6 +8,7 @@ import type { ChallengeAuth } from "../auth/challenge-auth.js";
 import { getDefaultWhatsAppAuthPath, loadConfig, loadFileConfig, saveConfig } from "../config.js";
 import { acquireBotLocks, getConfiguredBotLockSpecs, releaseAllOwnedBotLocks, releaseBotLocks } from "../lock.js";
 import { DiscordProvider } from "../transports/discord.js";
+import type { ITransportProvider } from "../transports/interface.js";
 import type { TransportManager } from "../transports/manager.js";
 import { MatrixProvider } from "../transports/matrix.js";
 import { SlackProvider } from "../transports/slack.js";
@@ -70,6 +71,28 @@ function showHelp(mctx: MenuContext): void {
 
 // ── Actions ─────────────────────────────────────────────────────────────────
 
+async function replaceConfiguredTransport(
+  mctx: MenuContext,
+  transport: ITransportProvider,
+  previousConfig: ReturnType<typeof loadConfig>,
+): Promise<boolean> {
+  try {
+    const replaced = await mctx.transportManager.replaceTransport(transport);
+    if (replaced) {
+      releaseBotLocks(
+        getConfiguredBotLockSpecs(previousConfig).filter((spec) => spec.transport === transport.type),
+      );
+    }
+    return true;
+  } catch (err) {
+    mctx.ui.notify(
+      `❌ Failed to disconnect existing ${transport.type} transport: ${(err as Error).message}`,
+      "error",
+    );
+    return false;
+  }
+}
+
 async function doConnect(mctx: MenuContext): Promise<void> {
   if (!ensureBridgeAvailable(mctx)) return;
 
@@ -123,10 +146,12 @@ async function doConfigure(mctx: MenuContext): Promise<void> {
     case "Telegram": {
       const token = await mctx.ui.input("Telegram bot token");
       if (!token) return;
+      const provider = new TelegramProvider(token, mctx.auth);
+      if (!(await replaceConfiguredTransport(mctx, provider, effectiveConfig))) {
+        break;
+      }
       fileConfig.telegram = { token };
       saveConfig(fileConfig);
-      const provider = new TelegramProvider(token, mctx.auth);
-      mctx.transportManager.addTransport(provider);
 
       const lockResult = acquireBotLocks(getConfiguredBotLockSpecs({ telegram: { token } }));
       if (!lockResult.ok) {
@@ -147,15 +172,18 @@ async function doConfigure(mctx: MenuContext): Promise<void> {
       const authPath = await mctx.ui.input(`Auth path (enter for default: ${getDefaultWhatsAppAuthPath()}, esc to cancel)`);
       if (authPath === undefined) return; // cancelled
 
-      fileConfig.whatsapp = authPath ? { authPath } : {};
-      saveConfig(fileConfig);
+      const nextWhatsAppConfig = authPath ? { authPath } : {};
       const whatsappConfig = {
-        ...fileConfig.whatsapp,
-        authPath: fileConfig.whatsapp?.authPath || getDefaultWhatsAppAuthPath(),
+        ...nextWhatsAppConfig,
+        authPath: nextWhatsAppConfig.authPath || getDefaultWhatsAppAuthPath(),
         debug: effectiveConfig.debug,
       };
       const provider = new WhatsAppProvider(whatsappConfig, mctx.auth);
-      mctx.transportManager.addTransport(provider);
+      if (!(await replaceConfiguredTransport(mctx, provider, effectiveConfig))) {
+        break;
+      }
+      fileConfig.whatsapp = nextWhatsAppConfig;
+      saveConfig(fileConfig);
 
       const lockResult = acquireBotLocks(getConfiguredBotLockSpecs({ whatsapp: { authPath: whatsappConfig.authPath } }));
       if (!lockResult.ok) {
@@ -178,10 +206,12 @@ async function doConfigure(mctx: MenuContext): Promise<void> {
       const appToken = await mctx.ui.input("Slack app token (xapp-...)");
       if (!appToken) return;
 
+      const provider = new SlackProvider({ botToken, appToken }, mctx.auth);
+      if (!(await replaceConfiguredTransport(mctx, provider, effectiveConfig))) {
+        break;
+      }
       fileConfig.slack = { botToken, appToken };
       saveConfig(fileConfig);
-      const provider = new SlackProvider(fileConfig.slack, mctx.auth);
-      mctx.transportManager.addTransport(provider);
 
       const lockResult = acquireBotLocks(getConfiguredBotLockSpecs({ slack: { botToken, appToken } }));
       if (!lockResult.ok) {
@@ -201,10 +231,12 @@ async function doConfigure(mctx: MenuContext): Promise<void> {
     case "Discord": {
       const token = await mctx.ui.input("Discord bot token");
       if (!token) return;
+      const provider = new DiscordProvider({ token }, mctx.auth);
+      if (!(await replaceConfiguredTransport(mctx, provider, effectiveConfig))) {
+        break;
+      }
       fileConfig.discord = { token };
       saveConfig(fileConfig);
-      const provider = new DiscordProvider(fileConfig.discord, mctx.auth);
-      mctx.transportManager.addTransport(provider);
 
       const lockResult = acquireBotLocks(getConfiguredBotLockSpecs({ discord: { token } }));
       if (!lockResult.ok) {
