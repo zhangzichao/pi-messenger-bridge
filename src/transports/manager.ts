@@ -45,15 +45,34 @@ export class TransportManager {
   }
 
   /**
-   * Connect all registered transports
+   * Connect all registered transports.
+   *
+   * If one transport fails to connect, transports that were started by this
+   * call are disconnected again so lock ownership does not outlive the actual
+   * live connections.
    */
   async connectAll(): Promise<void> {
-    const connections = Array.from(this.transports.values()).map((t) =>
-      t.connect().catch((err) => {
-        throw new Error(`${t.type} connection failed: ${(err as Error).message}`);
-      })
-    );
-    await Promise.all(connections);
+    const startedThisCall: ITransportProvider[] = [];
+
+    try {
+      for (const transport of this.transports.values()) {
+        const wasConnected = transport.isConnected;
+        try {
+          await transport.connect();
+        } catch (err) {
+          throw new Error(`${transport.type} connection failed: ${(err as Error).message}`);
+        }
+
+        if (!wasConnected) {
+          startedThisCall.push(transport);
+        }
+      }
+    } catch (err) {
+      await Promise.allSettled(
+        [...startedThisCall].reverse().map((transport) => transport.disconnect())
+      );
+      throw err;
+    }
   }
 
   /**
