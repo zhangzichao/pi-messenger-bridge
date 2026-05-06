@@ -1,9 +1,21 @@
+import type { Logger as SlackSdkLogger, LogLevel as SlackSdkLogLevel } from "@slack/logger";
 import type { ChallengeAuth } from "../auth/challenge-auth.js";
 import type { ExternalMessage } from "../types.js";
 import type { ITransportProvider } from "./interface.js";
 
 // Dynamic import for ESM modules
 type App = any;
+type SlackLogLevel = SlackSdkLogLevel;
+type SlackNotificationType = "info" | "warning" | "error";
+
+type SlackProviderOptions = {
+  notify?: (message: string, type: SlackNotificationType) => void;
+};
+
+type SlackLogger = SlackSdkLogger;
+
+const SOCKET_ISSUE_NOTIFICATION_WINDOW_MS = 30_000;
+const GENERIC_NOTIFICATION_WINDOW_MS = 10_000;
 
 async function loadSlackBolt() {
   const slack = await import("@slack/bolt");
@@ -22,7 +34,8 @@ export class SlackProvider implements ITransportProvider {
   private errorHandler?: (error: Error) => void;
   private lastProcessedMessageId = "";
   private warnedMissingUsersReadScope = false;
-  
+  private notificationTimestamps = new Map<string, number>();
+
   // Cache user info to avoid repeated API calls
   private userCache: Map<string, string> = new Map();
   // Cache channel info to detect DMs vs channels
@@ -30,7 +43,8 @@ export class SlackProvider implements ITransportProvider {
 
   constructor(
     private config: { botToken: string; appToken: string },
-    private auth: ChallengeAuth
+    private auth: ChallengeAuth,
+    private options: SlackProviderOptions = {},
   ) {}
 
   get isConnected(): boolean {
@@ -71,6 +85,119 @@ export class SlackProvider implements ITransportProvider {
     return undefined;
   }
 
+  private notify(
+    message: string,
+    type: SlackNotificationType,
+    key?: string,
+    cooldownMs: number = GENERIC_NOTIFICATION_WINDOW_MS,
+  ): void {
+    if (!this.options.notify) {
+      return;
+    }
+
+    if (key) {
+      const now = Date.now();
+      const lastNotifiedAt = this.notificationTimestamps.get(key);
+      if (lastNotifiedAt !== undefined && now - lastNotifiedAt < cooldownMs) {
+        return;
+      }
+      this.notificationTimestamps.set(key, now);
+    }
+
+    this.options.notify(message, type);
+  }
+
+  private formatValue(value: unknown): string {
+    if (typeof value === "string") {
+      return value;
+    }
+
+    if (value instanceof Error) {
+      return value.message || value.name;
+    }
+
+    if (typeof value === "object" && value !== null && "message" in value) {
+      const message = (value as { message?: unknown }).message;
+      if (typeof message === "string" && message.trim().length > 0) {
+        return message;
+      }
+    }
+
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+
+  private normalizeText(text: string): string {
+    return text.replace(/\s+/g, " ").trim();
+  }
+
+  private formatLoggerMessage(name: string, messages: unknown[]): string {
+    const renderedMessages = messages
+      .map((message) => this.normalizeText(this.formatValue(message)))
+      .filter((message) => message.length > 0);
+
+    if (renderedMessages.length === 0) {
+      return name;
+    }
+
+    return `${name} ${renderedMessages.join(" ")}`.trim();
+  }
+
+  private extractErrorMessage(error: unknown): string {
+    return this.normalizeText(this.formatValue(error));
+  }
+
+  private maybeNotifyTransientSocketIssue(message: string): boolean {
+    const normalized = this.normalizeText(message);
+
+    if (
+      normalized.includes("A ping wasn't received from the server before the timeout") ||
+      normalized.includes("A pong wasn't received from the server before the timeout") ||
+      normalized.includes("Failed to send ping to Slack") ||
+      normalized.includes("WebSocket error")
+    ) {
+      this.notify(
+        "⚠️ Slack websocket connection looks unstable. Reconnecting automatically...",
+        "warning",
+        "slack-websocket-issue",
+        SOCKET_ISSUE_NOTIFICATION_WINDOW_MS,
+      );
+      return true;
+    }
+
+    return false;
+  }
+
+  private createLogger(initialLevel: SlackLogLevel = "warn" as SlackLogLevel): SlackLogger {
+    let level = initialLevel;
+    let name = "slack";
+
+    return {
+      getLevel: () => level,
+      setLevel: (nextLevel: SlackLogLevel) => {
+        level = nextLevel;
+      },
+      setName: (nextName: string) => {
+        name = nextName;
+      },
+      debug: () => {
+        // Intentionally silent in TUI mode.
+      },
+      info: () => {
+        // Intentionally silent in TUI mode.
+      },
+      warn: (...messages: unknown[]) => {
+        this.maybeNotifyTransientSocketIssue(this.formatLoggerMessage(name, messages));
+      },
+      error: (...messages: unknown[]) => {
+        this.maybeNotifyTransientSocketIssue(this.formatLoggerMessage(name, messages));
+      },
+    };
+  }
+
   async connect(): Promise<void> {
     if (this._isConnected) return;
 
@@ -86,16 +213,20 @@ export class SlackProvider implements ITransportProvider {
       token: botToken,
       appToken: appToken,
       socketMode: true,
-      logLevel: slack.LogLevel.WARN,
+      logger: this.createLogger(slack.LogLevel.WARN),
     });
 
     // Get bot's own user ID for mention detection
     try {
       const authResult = await this.app.client.auth.test();
       this.botUserId = authResult.user_id || "";
-      console.log(`[Slack] Bot user ID: ${this.botUserId}`);
-    } catch (e) {
-      console.warn("[Slack] Could not get bot info:", e);
+    } catch (_error) {
+      this.notify(
+        "⚠️ Slack connected, but bot identity lookup failed. Mention detection in channels may be limited.",
+        "warning",
+        "slack-bot-identity",
+        SOCKET_ISSUE_NOTIFICATION_WINDOW_MS,
+      );
     }
 
     // Listen for all messages
@@ -137,7 +268,12 @@ export class SlackProvider implements ITransportProvider {
           } catch (error: any) {
             if (!this.warnedMissingUsersReadScope && error?.data?.error === "missing_scope") {
               this.warnedMissingUsersReadScope = true;
-              console.warn("[Slack] users.info is missing scope. Add users:read and reinstall the app to show human-friendly usernames.");
+              this.notify(
+                "⚠️ Slack app is missing users:read. Human-friendly usernames may not be shown until you add the scope and reinstall the app.",
+                "warning",
+                "slack-users-read-scope",
+                SOCKET_ISSUE_NOTIFICATION_WINDOW_MS,
+              );
             }
             username = userId;
             this.userCache.set(userId, username);
@@ -164,18 +300,18 @@ export class SlackProvider implements ITransportProvider {
       }
 
       // Detect bot mention: <@BOT_USER_ID>
-      const wasMentioned = this.botUserId 
+      const wasMentioned = this.botUserId
         ? text.includes(`<@${this.botUserId}>`)
         : false;
 
       const isGroupChat = !channelInfo.isDM;
 
       // Check authorization
-      const sendMessageToUser = async (cId: string, text: string) => {
+      const sendMessageToUser = async (cId: string, outgoingText: string) => {
         if (this.app) {
           await this.app.client.chat.postMessage({
             channel: cId,
-            text: text,
+            text: outgoingText,
           });
         }
       };
@@ -187,7 +323,7 @@ export class SlackProvider implements ITransportProvider {
         isGroupChat,
         wasMentioned,
         sendMessageToUser,
-        this.type
+        this.type,
       );
 
       // Handle admin commands and challenge codes in DM
@@ -196,8 +332,8 @@ export class SlackProvider implements ITransportProvider {
           text,
           channelId,
           userId,
-          async (text) => await this.sendMessage(channelId, text),
-          this.type
+          async (outgoingText) => await this.sendMessage(channelId, outgoingText),
+          this.type,
         );
         if (handled) {
           return;
@@ -229,9 +365,13 @@ export class SlackProvider implements ITransportProvider {
 
     // Handle errors
     this.app.error(async (error: any) => {
-      console.error("[Slack] Error:", error);
+      const message = this.extractErrorMessage(error);
+      if (this.maybeNotifyTransientSocketIssue(message)) {
+        return;
+      }
+
       if (this.errorHandler) {
-        this.errorHandler(new Error(String(error)));
+        this.errorHandler(new Error(message));
       }
     });
 
@@ -239,7 +379,7 @@ export class SlackProvider implements ITransportProvider {
       await this.app.start();
       this._isConnected = true;
     } catch (error) {
-      throw new Error(`Slack connection failed: ${(error as Error).message}`);
+      throw new Error(`Slack connection failed: ${this.extractErrorMessage(error)}`);
     }
   }
 
@@ -255,7 +395,7 @@ export class SlackProvider implements ITransportProvider {
     this._isConnected = false;
     this.userCache.clear();
     this.channelCache.clear();
-    console.log("[Slack] Disconnected");
+    this.notificationTimestamps.clear();
   }
 
   async sendMessage(chatId: string, text: string): Promise<void> {
@@ -270,7 +410,7 @@ export class SlackProvider implements ITransportProvider {
         text: text,
       });
     } catch (error) {
-      throw new Error(`Slack send failed: ${(error as Error).message}`);
+      throw new Error(`Slack send failed: ${this.extractErrorMessage(error)}`);
     }
   }
 

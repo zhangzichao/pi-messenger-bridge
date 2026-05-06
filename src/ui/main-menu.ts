@@ -206,7 +206,9 @@ async function doConfigure(mctx: MenuContext): Promise<void> {
       const appToken = await mctx.ui.input("Slack app token (xapp-...)");
       if (!appToken) return;
 
-      const provider = new SlackProvider({ botToken, appToken }, mctx.auth);
+      const provider = new SlackProvider({ botToken, appToken }, mctx.auth, {
+        notify: (message, type) => mctx.ui.notify(message, type),
+      });
       if (!(await replaceConfiguredTransport(mctx, provider, effectiveConfig))) {
         break;
       }
