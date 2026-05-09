@@ -122,7 +122,7 @@ export class ChallengeAuth {
     const channelAuthData = this.channelAuth.get(chatId);
 
     // Channel not enabled
-    if (!channelAuthData || !channelAuthData.enabled) {
+    if (!channelAuthData?.enabled) {
       return false;
     }
 

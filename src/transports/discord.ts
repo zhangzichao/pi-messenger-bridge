@@ -192,7 +192,7 @@ export class DiscordProvider implements ITransportProvider {
 
     try {
       const channel = await this.client.channels.fetch(chatId);
-      if (!channel || !channel.isTextBased()) {
+      if (!channel?.isTextBased()) {
         throw new Error(`Cannot send to channel ${chatId}`);
       }
 
