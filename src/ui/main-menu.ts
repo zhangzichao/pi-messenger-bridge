@@ -9,6 +9,7 @@ import { loadConfig, saveConfig } from "../config.js";
 import { acquireLock, releaseLock } from "../lock.js";
 import { DiscordProvider } from "../transports/discord.js";
 import type { TransportManager } from "../transports/manager.js";
+import { MatrixProvider } from "../transports/matrix.js";
 import { SlackProvider } from "../transports/slack.js";
 import { TelegramProvider } from "../transports/telegram.js";
 import { WhatsAppProvider } from "../transports/whatsapp.js";
@@ -95,6 +96,7 @@ async function doConfigure(mctx: MenuContext): Promise<void> {
     "WhatsApp",
     "Slack",
     "Discord",
+    "Matrix",
   ]);
   if (!platform) return;
 
@@ -181,6 +183,28 @@ async function doConfigure(mctx: MenuContext): Promise<void> {
         }
       } else {
         mctx.ui.notify("✅ Discord configured (another instance is connected — run /msg-bridge connect later)", "info");
+      }
+      break;
+    }
+    case "Matrix": {
+      const homeserverUrl = await mctx.ui.input("Matrix homeserver URL (e.g. https://matrix.org)");
+      if (!homeserverUrl) return;
+      const accessToken = await mctx.ui.input("Matrix access token");
+      if (!accessToken) return;
+      config.matrix = { homeserverUrl, accessToken };
+      saveConfig(config);
+      const provider = new MatrixProvider(config.matrix, mctx.auth);
+      mctx.transportManager.addTransport(provider);
+      if (acquireLock()) {
+        try {
+          await provider.connect();
+          mctx.ui.notify("✅ Matrix configured and connected", "info");
+        } catch (err) {
+          releaseLock();
+          mctx.ui.notify(`⚠️ Matrix setup error: ${(err as Error).message}`, "error");
+        }
+      } else {
+        mctx.ui.notify("✅ Matrix configured (another instance is connected — run /msg-bridge connect later)", "info");
       }
       break;
     }

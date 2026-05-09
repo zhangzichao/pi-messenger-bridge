@@ -1,6 +1,6 @@
 # pi-messenger-bridge
 
-Bridge common messengers (Telegram, WhatsApp, Slack, Discord) into pi.
+Bridge common messengers (Telegram, WhatsApp, Slack, Discord, Matrix) into pi.
 
 Remote users can interact with your pi coding agent via their messenger app.
 
@@ -10,7 +10,7 @@ https://github.com/user-attachments/assets/cd64360e-e8cd-4820-a67f-bd127c5d6035
 
 ## Features
 
-- 📱 Multi-messenger support (Telegram, WhatsApp, Slack, Discord)
+- 📱 Multi-messenger support (Telegram, WhatsApp, Slack, Discord, Matrix)
 - 🔐 Challenge-based authentication (6-digit codes)
 - 🎛️ Interactive menu (`/msg-bridge`) for setup and management
 - 🔒 Single-instance guard — prevents duplicate bot polling with sub-agents
@@ -90,6 +90,26 @@ Or set via environment variable:
 export PI_DISCORD_TOKEN="your-bot-token"
 ```
 
+#### Matrix
+
+Works with any Matrix homeserver — Element X, Element Web, FluffyChat, etc. The bot auto-joins rooms it's invited to.
+
+1. Register a bot account on your homeserver (or reuse an existing user)
+2. Get an access token: log in once via Element and copy from **Settings → Help & About → Advanced**, or POST to `/_matrix/client/v3/login`
+3. Note your homeserver URL (e.g. `https://matrix.org`)
+
+```bash
+/msg-bridge configure matrix <homeserver-url> <access-token>
+```
+
+Or set via environment variables:
+```bash
+export PI_MATRIX_HOMESERVER="https://matrix.org"
+export PI_MATRIX_ACCESS_TOKEN="syt_..."
+```
+
+E2EE is enabled by default. Verify the bot's device once from another Matrix client (Element, etc.) — until verified, encrypted rooms cannot decrypt messages in either direction. Set `"encryption": false` in `matrix` config to disable.
+
 ### 3. Connect
 
 ```bash
@@ -127,6 +147,7 @@ Example config:
   "whatsapp": { "authPath": "..." },
   "slack": { "botToken": "...", "appToken": "..." },
   "discord": { "token": "..." },
+  "matrix": { "homeserverUrl": "https://matrix.org", "accessToken": "syt_...", "encryption": true },
   "auth": {
     "trustedUsers": ["telegram:123", "whatsapp:456"],
     "adminUserId": "telegram:789"
@@ -146,6 +167,8 @@ Environment variables override file config:
 - `PI_SLACK_BOT_TOKEN` — Slack bot token (xoxb-...)
 - `PI_SLACK_APP_TOKEN` — Slack app token (xapp-...)
 - `PI_DISCORD_TOKEN` — Discord bot token
+- `PI_MATRIX_HOMESERVER` — Matrix homeserver URL (e.g. `https://matrix.org`)
+- `PI_MATRIX_ACCESS_TOKEN` — Matrix access token
 - `MSG_BRIDGE_DEBUG` — Enable debug logging (true/false)
 
 ## Security
