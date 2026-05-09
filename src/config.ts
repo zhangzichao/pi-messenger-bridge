@@ -43,6 +43,12 @@ export function loadConfig(): MsgBridgeConfig {
   if (process.env.PI_DISCORD_TOKEN) {
     config.discord = { token: process.env.PI_DISCORD_TOKEN };
   }
+  if (process.env.PI_MATRIX_HOMESERVER && process.env.PI_MATRIX_ACCESS_TOKEN) {
+    config.matrix = {
+      homeserverUrl: process.env.PI_MATRIX_HOMESERVER,
+      accessToken: process.env.PI_MATRIX_ACCESS_TOKEN,
+    };
+  }
 
   return config;
 }

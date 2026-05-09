@@ -9,6 +9,7 @@ import { extractTextFromMessage, formatToolCalls, hasToolCalls, splitMessage } f
 import { acquireLock, releaseLock } from "./lock.js";
 import { DiscordProvider } from "./transports/discord.js";
 import { TransportManager } from "./transports/manager.js";
+import { MatrixProvider } from "./transports/matrix.js";
 import { SlackProvider } from "./transports/slack.js";
 import { TelegramProvider } from "./transports/telegram.js";
 import { WhatsAppProvider } from "./transports/whatsapp.js";
@@ -139,6 +140,15 @@ export default function (pi: ExtensionAPI): void {
           Promise.resolve().then(() => {
             const discordProvider = new DiscordProvider(config.discord!, auth);
             transportManager.addTransport(discordProvider);
+          })
+        );
+      }
+
+      if (config.matrix?.homeserverUrl && config.matrix?.accessToken) {
+        transportPromises.push(
+          Promise.resolve().then(() => {
+            const matrixProvider = new MatrixProvider(config.matrix!, auth);
+            transportManager.addTransport(matrixProvider);
           })
         );
       }
@@ -291,6 +301,8 @@ export default function (pi: ExtensionAPI): void {
           "                              Configure Telegram bot",
           "/msg-bridge configure whatsapp",
           "                              Configure WhatsApp (scan QR)",
+          "/msg-bridge configure matrix <homeserver-url> <access-token>",
+          "                              Configure Matrix (Element X, etc)",
           "/msg-bridge widget            Toggle status widget on/off",
           "/msg-bridge toggletools       Toggle tool call visibility",
           "",
@@ -437,6 +449,34 @@ export default function (pi: ExtensionAPI): void {
               }
             } else {
               context.ui.notify("✅ Discord configured (another instance is connected — run /msg-bridge connect later)", "info");
+            }
+            updateWidget();
+            break;
+          }
+
+          case "matrix": {
+            const matrixParts = token.split(/\s+/);
+            const homeserverUrl = matrixParts[0];
+            const matrixAccessToken = matrixParts.slice(1).join(" ");
+            if (!homeserverUrl || !matrixAccessToken) {
+              context.ui.notify("Usage: /msg-bridge configure matrix <homeserver-url> <access-token>", "error");
+              return;
+            }
+
+            config.matrix = { homeserverUrl, accessToken: matrixAccessToken };
+            saveConfig(config);
+            const matrixProvider = new MatrixProvider(config.matrix, auth);
+            transportManager.addTransport(matrixProvider);
+            if (acquireLock()) {
+              try {
+                await matrixProvider.connect();
+                context.ui.notify("✅ Matrix configured and connected", "info");
+              } catch (err) {
+                releaseLock();
+                context.ui.notify(`⚠️ Matrix setup error: ${(err as Error).message}`, "error");
+              }
+            } else {
+              context.ui.notify("✅ Matrix configured (another instance is connected — run /msg-bridge connect later)", "info");
             }
             updateWidget();
             break;
