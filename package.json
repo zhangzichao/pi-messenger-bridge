@@ -59,9 +59,9 @@
     "CHANGELOG.md"
   ],
   "peerDependencies": {
-    "@mariozechner/pi-ai": "*",
-    "@mariozechner/pi-coding-agent": "*",
-    "@mariozechner/pi-tui": "*"
+    "@earendil-works/pi-ai": ">=0.74",
+    "@earendil-works/pi-coding-agent": ">=0.74",
+    "@earendil-works/pi-tui": ">=0.74"
   },
   "dependencies": {
     "@slack/bolt": "^4.6.0",
@@ -72,15 +72,12 @@
     "qrcode-terminal": "^0.12.0"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.8",
-    "@mariozechner/pi-ai": "latest",
-    "@mariozechner/pi-coding-agent": "latest",
-    "@mariozechner/pi-tui": "latest",
-    "@types/node": "^25.3.0",
+    "@biomejs/biome": "^2.4.14",
+    "@types/node": "^25.6.2",
     "@types/node-telegram-bot-api": "^0.64.14",
     "@types/qrcode-terminal": "^0.12.2",
     "fast-check": "^4.5.3",
-    "typescript": "^6.0.2",
-    "vitest": "^4.1.1"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.5"
   }
 }
