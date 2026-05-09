@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `hideToolCalls` config option and `/msg-bridge toggletools` command to hide tool call summaries in remote messages
+- Empty-message guard in all transports (Discord, Telegram, Slack, WhatsApp) to prevent provider errors on whitespace-only payloads
+
+### Fixed
+- `sendUserMessage` crash when a remote message arrives mid-turn — messages are now queued via `{ deliverAs: "steer" }` (fixes #10)
+- `pendingRemoteChat` no longer cleared on tool-call-only turns, so the next response reaches the right chat
+- Whitespace-only assistant responses no longer trigger Discord's "Cannot send an empty message" error
+
 ## [0.3.0] - 2026-03-25
 
 ### Added

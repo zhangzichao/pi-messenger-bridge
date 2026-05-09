@@ -217,6 +217,7 @@ export class SlackProvider implements ITransportProvider {
     if (!this.app) {
       throw new Error("Slack not connected");
     }
+    if (!text?.trim()) return;
 
     try {
       await this.app.client.chat.postMessage({

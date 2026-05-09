@@ -121,4 +121,19 @@ describe('config', () => {
     const { loadConfig } = await importConfig();
     expect(loadConfig().slack).toBeUndefined();
   });
+
+  it('saves and loads hideToolCalls config', async () => {
+    const { loadConfig, saveConfig } = await importConfig();
+
+    saveConfig({ hideToolCalls: true, autoConnect: true });
+    const loaded = loadConfig();
+
+    expect(loaded.hideToolCalls).toBe(true);
+    expect(loaded.autoConnect).toBe(true);
+  });
+
+  it('hideToolCalls defaults to undefined (not hidden)', async () => {
+    const { loadConfig } = await importConfig();
+    expect(loadConfig().hideToolCalls).toBeUndefined();
+  });
 });
