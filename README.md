@@ -113,6 +113,7 @@ The user enters the code in the bot chat to become a trusted user.
 | `/msg-bridge disconnect` | Disconnect all transports |
 | `/msg-bridge configure <platform> [token]` | Set transport credentials via CLI |
 | `/msg-bridge widget` | Toggle status widget on/off |
+| `/msg-bridge toggletools` | Toggle tool call visibility in remote messages |
 | `/msg-bridge help` | Show command reference |
 
 ## Configuration
