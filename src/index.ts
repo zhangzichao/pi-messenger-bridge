@@ -214,7 +214,7 @@ export default function (pi: ExtensionAPI): void {
       const config = loadConfig();
 
       const parts: string[] = [];
-      const trimmedResponse = responseText?.trim();
+      const trimmedResponse = responseText.trim();
       if (trimmedResponse) parts.push(trimmedResponse);
       if (toolCallsText && !config.hideToolCalls) parts.push(toolCallsText);
 
@@ -490,7 +490,7 @@ export default function (pi: ExtensionAPI): void {
 
       case "toggletools": {
         const cfg3 = loadConfig();
-        cfg3.hideToolCalls = cfg3.hideToolCalls === false;
+        cfg3.hideToolCalls = !cfg3.hideToolCalls;
         saveConfig(cfg3);
         const toolState = cfg3.hideToolCalls ? "hidden" : "shown";
         context.ui.notify(`🔧 Tool calls ${toolState} in remote messages`, "info");
