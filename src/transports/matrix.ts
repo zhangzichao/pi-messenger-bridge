@@ -1,25 +1,25 @@
+import type { ILogger } from "matrix-bot-sdk";
 import {
-  MatrixClient,
-  SimpleFsStorageProvider,
   AutojoinRoomsMixin,
+  LogService,
+  MatrixClient,
+  RichConsoleLogger,
   RustSdkCryptoStorageProvider,
   RustSdkCryptoStoreType,
-  LogService,
-  RichConsoleLogger,
+  SimpleFsStorageProvider,
 } from "matrix-bot-sdk";
-import type { ILogger } from "matrix-bot-sdk";
-import type { ITransportProvider } from "./interface.js";
-import type { ExternalMessage } from "../types.js";
+import * as os from "os";
+import * as path from "path";
 import type { ChallengeAuth } from "../auth/challenge-auth.js";
+import type { ExternalMessage } from "../types.js";
+import type { ITransportProvider } from "./interface.js";
 import {
+  extractUsername,
   formatForMatrix,
   shouldSkipEvent,
-  extractUsername,
-  wasBotMentioned,
   stripBotMention,
+  wasBotMentioned,
 } from "./matrix-utils.js";
-import * as path from "path";
-import * as os from "os";
 
 /**
  * Matrix transport provider using matrix-bot-sdk

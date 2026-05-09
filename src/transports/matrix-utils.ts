@@ -14,7 +14,7 @@ export function escapeHtml(text: string): string {
 
 /** Convert markdown to Matrix HTML. Returns plain body + optional formatted HTML. */
 export function formatForMatrix(text: string): { body: string; formattedBody?: string } {
-  const hasMarkdown = /[*_`#\[]/.test(text);
+  const hasMarkdown = /[*_`#[]/.test(text);
   if (!hasMarkdown) {
     return { body: text };
   }
@@ -45,8 +45,8 @@ export function formatForMatrix(text: string): { body: string; formattedBody?: s
   html = html.replace(/\n/g, "<br>");
 
   // Restore code blocks and inline code
-  html = html.replace(/__CODEBLOCK_(\d+)__/g, (_, idx) => codeBlocks[parseInt(idx)]);
-  html = html.replace(/__INLINECODE_(\d+)__/g, (_, idx) => inlineCodes[parseInt(idx)]);
+  html = html.replace(/__CODEBLOCK_(\d+)__/g, (_, idx) => codeBlocks[parseInt(idx, 10)]);
+  html = html.replace(/__INLINECODE_(\d+)__/g, (_, idx) => inlineCodes[parseInt(idx, 10)]);
 
   return { body: text, formattedBody: html };
 }

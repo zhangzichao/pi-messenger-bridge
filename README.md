@@ -108,7 +108,9 @@ export PI_MATRIX_HOMESERVER="https://matrix.org"
 export PI_MATRIX_ACCESS_TOKEN="syt_..."
 ```
 
-E2EE is enabled by default. Verify the bot's device once from another Matrix client (Element, etc.) — until verified, encrypted rooms cannot decrypt messages in either direction. Set `"encryption": false` in `matrix` config to disable.
+E2EE is **on by default**. Verify the bot's device once from another Matrix client (Element, etc.) — until verified, encrypted rooms can't be decrypted in either direction.
+
+Set `"encryption": false` in the `matrix` config to disable — useful for non-encrypted rooms only, or to bypass crypto-store/server desync (e.g. `M_UNKNOWN: One time key … already exists`). **Caveat:** with E2EE off, the homeserver sees plaintext, and the bot can't participate in encrypted rooms at all.
 
 ### 3. Connect
 

@@ -1,12 +1,12 @@
-import { describe, it, expect } from "vitest";
 import * as fc from "fast-check";
+import { describe, expect, it } from "vitest";
 import {
   escapeHtml,
+  extractUsername,
   formatForMatrix,
   shouldSkipEvent,
-  extractUsername,
-  wasBotMentioned,
   stripBotMention,
+  wasBotMentioned,
 } from "./matrix-utils.js";
 
 // ─── escapeHtml ───────────────────────────────────────────────
@@ -273,7 +273,7 @@ describe("formatForMatrix properties", () => {
 
   it("formattedBody is undefined when no markdown chars present", () => {
     // Generate strings that don't contain markdown-triggering chars
-    const noMarkdown = fc.string().filter((s) => !/[*_`#\[]/.test(s));
+    const noMarkdown = fc.string().filter((s) => !/[*_`#[]/.test(s));
     fc.assert(
       fc.property(noMarkdown, (text) => {
         const result = formatForMatrix(text);
