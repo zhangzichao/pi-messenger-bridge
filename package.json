@@ -64,6 +64,7 @@
     "@earendil-works/pi-tui": ">=0.74"
   },
   "dependencies": {
+    "@sinclair/typebox": "^0.34.49",
     "@slack/bolt": "^4.6.0",
     "@whiskeysockets/baileys": "^7.0.0-rc.9",
     "discord.js": "^14.25.1",

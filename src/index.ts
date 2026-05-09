@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Type } from "@sinclair/typebox";
 import * as fs from "fs";
 import * as path from "path";
 import { ChallengeAuth } from "./auth/challenge-auth.js";
@@ -675,6 +676,85 @@ export default function (pi: ExtensionAPI): void {
         const toolState = cfg3.hideToolCalls ? "hidden" : "shown";
         context.ui.notify(`🔧 Tool calls ${toolState} in remote messages`, "info");
         break;
+      }
+    },
+  });
+
+  /**
+   * Register send_bridge_message tool — allows the agent to proactively send
+   * messages to remote users, e.g. for scheduled summaries or follow-ups.
+   */
+  pi.registerTool({
+    name: "send_bridge_message",
+    label: "Send Bridge Message",
+    description:
+      "Send a message to a remote user via the messenger bridge. " +
+      "Use this to proactively notify users (e.g., scheduled summaries, alerts, follow-ups) " +
+      "without waiting for them to message first. " +
+      "If transport and chatId are omitted, sends to the last active conversation.",
+    parameters: Type.Object({
+      text: Type.String({ description: "Message content to send to the remote user" }),
+      transport: Type.Optional(
+        Type.String({
+          description:
+            "Transport type: 'slack', 'telegram', 'discord', or 'whatsapp'. " +
+            "Omit to use the last active transport.",
+        }),
+      ),
+      chatId: Type.Optional(
+        Type.String({
+          description:
+            "Target chat/channel ID. Omit to use the last active chat.",
+        }),
+      ),
+    }),
+    async execute(toolCallId, params, _signal, _onUpdate, _ctx) {
+      const { text, transport, chatId } = params;
+
+      const targetTransport = transport || pendingRemoteChat?.transport;
+      const targetChat = chatId || pendingRemoteChat?.chatId;
+
+      if (!targetTransport || !targetChat) {
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                "❌ No target chat available. A user must message the bot first " +
+                "to establish a conversation, or specify both transport and chatId explicitly. " +
+                "Connected transports: " +
+                transportManager
+                  .getAllTransports()
+                  .filter((t) => t.isConnected)
+                  .map((t) => t.type)
+                  .join(", ") || "none",
+            },
+          ],
+          details: undefined,
+        };
+      }
+
+      try {
+        await transportManager.sendMessage(targetChat, targetTransport, text);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `✅ Message sent to ${targetTransport} chat.`,
+            },
+          ],
+          details: undefined,
+        };
+      } catch (err) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `❌ Failed to send message via ${targetTransport}: ${(err as Error).message}`,
+            },
+          ],
+          details: undefined,
+        };
       }
     },
   });
