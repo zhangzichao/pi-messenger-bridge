@@ -174,7 +174,7 @@ export default function (pi: ExtensionAPI): void {
       };
 
       const taggedMessage = `[📱 @${msg.username} via ${msg.transport}]: ${msg.content}`;
-      pi.sendUserMessage(taggedMessage, { deliverAs: "steer" });
+      pi.sendUserMessage(taggedMessage, { deliverAs: "followUp" });
     });
 
     transportManager.onError((err, transport) => {
