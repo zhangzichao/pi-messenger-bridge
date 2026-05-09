@@ -107,6 +107,7 @@ export class TelegramProvider implements ITransportProvider {
     if (!this.bot) {
       throw new Error("Telegram bot not connected");
     }
+    if (!text?.trim()) return;
     const formattedText = this.formatForTelegram(text);
     await this.bot.sendMessage(chatId, formattedText, { parse_mode: "Markdown" });
   }

@@ -188,8 +188,7 @@ export class DiscordProvider implements ITransportProvider {
       throw new Error("Discord not connected");
     }
 
-    const trimmed = text?.trim();
-    if (!trimmed) return;
+    if (!text?.trim()) return;
 
     try {
       const channel = await this.client.channels.fetch(chatId);

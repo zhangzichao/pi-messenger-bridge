@@ -164,6 +164,7 @@ export class WhatsAppProvider implements ITransportProvider {
     if (!this.socket) {
       throw new Error("WhatsApp not connected");
     }
+    if (!text?.trim()) return;
 
     await this.socket.sendMessage(chatId, { text });
   }
