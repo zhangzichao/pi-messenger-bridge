@@ -7,8 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-09
+
 ### Added
-- Matrix transport via `matrix-bot-sdk` — works with Element X, Element Web, FluffyChat, any Matrix client. Auto-joins rooms, group chat support with mention detection, optional E2EE (Rust SDK crypto store)
+- Matrix transport via `matrix-bot-sdk` — works with Element X, Element Web, FluffyChat, any Matrix client. Auto-joins rooms, group chat support with mention detection, optional E2EE (Rust SDK crypto store). Set `"encryption": false` in the `matrix` config to disable E2EE (thanks @jchidley)
 - `hideToolCalls` config option and `/msg-bridge toggletools` command to hide tool call summaries in remote messages
 - Empty-message guard in all transports (Discord, Telegram, Slack, WhatsApp, Matrix) to prevent provider errors on whitespace-only payloads
 
@@ -108,5 +110,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - First authenticated user becomes admin
 - Trusted user validation on all messages
 
-[unreleased]: https://github.com/tintinweb/pi-messenger-bridge/compare/v0.1.0...HEAD
+[unreleased]: https://github.com/tintinweb/pi-messenger-bridge/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/tintinweb/pi-messenger-bridge/releases/tag/v0.4.0
 [0.1.0]: https://github.com/tintinweb/pi-messenger-bridge/releases/tag/v0.1.0
