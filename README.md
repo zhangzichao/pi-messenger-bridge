@@ -138,6 +138,20 @@ The user enters the code in the bot chat to become a trusted user.
 | `/msg-bridge toggletools` | Toggle tool call visibility in remote messages |
 | `/msg-bridge help` | Show command reference |
 
+### Admin commands (in DM with the bot)
+
+Trusted users can DM the bot directly to manage state. Reply with `/help` for the full list:
+
+| Command | Description |
+|---|---|
+| `/help` | Show admin command reference |
+| `/trusted` | List trusted users |
+| `/revoke <userId>` | Revoke trust for a user |
+| `/channels` | List enabled channels |
+| `/enable <chatId> <all\|mentions\|trusted-only>` | Enable a channel |
+| `/disable <chatId>` | Disable a channel |
+| `/toggletools` | Toggle tool call visibility in replies |
+
 ## Configuration
 
 Config is stored at `~/.pi/msg-bridge.json` with secure permissions (chmod 600).

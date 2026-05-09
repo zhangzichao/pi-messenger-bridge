@@ -24,43 +24,31 @@ export class TelegramProvider implements ITransportProvider {
   }
 
   /**
-   * Convert standard markdown to Telegram markdown format
-   * Telegram markdown: *bold* _italic_ `code` [link](url)
-   * Standard markdown: **bold** *italic* `code` [link](url)
+   * Convert standard markdown to Telegram MarkdownV1 format.
+   *
+   * Telegram MarkdownV1 syntax: *bold*, _italic_, `code`, ```pre```, [text](url).
+   * Per docs, only `_ * [ \`` need backslash-escaping when literal — otherwise
+   * a stray `_` (e.g. in a snake_case tool name like `hud_canvas`) is parsed
+   * as an opening italic marker with no close, returning HTTP 400.
+   *
+   * Strategy: lift valid markdown patterns into NUL-sentinel placeholders,
+   * escape the remaining specials, then restore the placeholders.
    */
   private formatForTelegram(text: string): string {
-    // Escape special Telegram characters first (except those used in markdown)
-    // Special chars that need escaping: _ * [ ] ( ) ~ ` > # + - = | { } . !
-    // But we'll handle markdown-specific ones carefully
-    
-    // Step 1: Protect code blocks and inline code from conversion
-    const codeBlocks: string[] = [];
-    const inlineCodes: string[] = [];
-    
-    // Extract and protect code blocks
-    text = text.replace(/```([\s\S]*?)```/g, (match, _code) => {
-      codeBlocks.push(match);
-      return `__CODEBLOCK_${codeBlocks.length - 1}__`;
-    });
-    
-    // Extract and protect inline code
-    text = text.replace(/`([^`]+)`/g, (match, _code) => {
-      inlineCodes.push(match);
-      return `__INLINECODE_${inlineCodes.length - 1}__`;
-    });
-    
-    // Step 2: Convert **bold** to *bold* (Telegram format)
-    text = text.replace(/\*\*([^*]+?)\*\*/g, '*$1*');
-    
-    // Step 3: Convert *italic* to _italic_ (Telegram format)
-    // But only single * not followed by another *
-    text = text.replace(/(?<!\*)\*(?!\*)([^*]+?)(?<!\*)\*(?!\*)/g, '_$1_');
-    
-    // Step 4: Restore code blocks and inline code
-    text = text.replace(/__CODEBLOCK_(\d+)__/g, (_, idx) => codeBlocks[parseInt(idx, 10)]);
-    text = text.replace(/__INLINECODE_(\d+)__/g, (_, idx) => inlineCodes[parseInt(idx, 10)]);
-    
-    return text;
+    const lifted: string[] = [];
+    const lift = (s: string) => `\x00${lifted.push(s) - 1}\x00`;
+
+    // Lift valid markdown patterns in priority order — they bypass the escape step below.
+    text = text.replace(/```[\s\S]*?```/g, lift); // code blocks
+    text = text.replace(/`[^`]+`/g, lift); // inline code
+    text = text.replace(/\*\*([^*]+?)\*\*/g, (_, c) => lift(`*${c}*`)); // **bold** → *bold*
+    text = text.replace(/(?<!\*)\*(?!\*)([^*]+?)(?<!\*)\*(?!\*)/g, (_, c) => lift(`_${c}_`)); // *italic* → _italic_
+    text = text.replace(/\[[^\]]+\]\([^)]+\)/g, lift); // [text](url)
+
+    // Escape literal markdown specials so Telegram treats them as text.
+    text = text.replace(/[_*[`]/g, "\\$&");
+
+    return text.replace(/\x00(\d+)\x00/g, (_, i) => lifted[parseInt(i, 10)]);
   }
 
   async connect(): Promise<void> {

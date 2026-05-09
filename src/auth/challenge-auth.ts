@@ -3,6 +3,8 @@
  * Ported from vscode-chonky-remote-pilot
  */
 
+import { loadConfig, saveConfig } from "../config.js";
+
 interface ChallengeData {
   code: string;
   userId: string;
@@ -266,6 +268,15 @@ export class ChallengeAuth {
         return true;
       }
 
+      case "/toggletools": {
+        const cfg = loadConfig();
+        cfg.hideToolCalls = !cfg.hideToolCalls;
+        saveConfig(cfg);
+        const state = cfg.hideToolCalls ? "hidden" : "shown";
+        await sendMessage(`🔧 Tool calls ${state} in remote messages`);
+        return true;
+      }
+
       case "/revoke": {
         if (parts.length < 2) {
           await sendMessage("Usage: /revoke <userId> or /revoke <transport:userId>");
@@ -370,6 +381,7 @@ export class ChallengeAuth {
 • \`/enable <chatId> <mode>\` — Enable a channel
   Modes: \`all\`, \`mentions\`, \`trusted-only\`
 • \`/disable <chatId>\` — Disable a channel
+• \`/toggletools\` — Toggle tool call visibility in replies
 
 *Authentication:*
 • First DM to bot → 6-digit code shown in terminal

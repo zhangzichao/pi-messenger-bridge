@@ -65,14 +65,14 @@ describe('formatToolCalls', () => {
       ],
     } as any;
     const result = formatToolCalls(msg);
-    expect(result).toBe('🔧 grep (pattern=hello, path=/src)');
+    expect(result).toBe('🔧 `grep` (pattern=hello, path=/src)');
   });
 
   it('formats tool calls without arguments', () => {
     const msg = {
       content: [{ type: 'toolCall', name: 'status', arguments: {} }],
     } as any;
-    expect(formatToolCalls(msg)).toBe('🔧 status');
+    expect(formatToolCalls(msg)).toBe('🔧 `status`');
   });
 
   it('returns empty string when no tool calls', () => {
@@ -106,6 +106,6 @@ describe('formatToolCalls', () => {
       ],
     } as any;
     const result = formatToolCalls(msg);
-    expect(result).toBe('🔧 grep (pattern=a)\n🔧 read (path=/b)');
+    expect(result).toBe('🔧 `grep` (pattern=a)\n🔧 `read` (path=/b)');
   });
 });
