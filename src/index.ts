@@ -301,6 +301,17 @@ export default function (pi: ExtensionAPI): void {
         messageId: msg.messageId,
       };
 
+      // Persist last known chat target per transport for proactive messaging
+      if (workspaceAvailable && msg.transport && msg.chatId) {
+        const cfg = loadFileConfig();
+        if (!cfg.lastChatTargets) cfg.lastChatTargets = {};
+        cfg.lastChatTargets[msg.transport] = {
+          chatId: msg.chatId,
+          username: msg.username,
+        };
+        saveConfig(cfg);
+      }
+
       const marker = !msg.isGroupChat ? "D" : msg.wasMentioned ? "C-M" : "C";
       const chatLabel = msg.isGroupChat
         ? msg.chatName
@@ -711,17 +722,52 @@ export default function (pi: ExtensionAPI): void {
     async execute(toolCallId, params, _signal, _onUpdate, _ctx) {
       const { text, transport, chatId } = params;
 
-      const targetTransport = transport || pendingRemoteChat?.transport;
-      const targetChat = chatId || pendingRemoteChat?.chatId;
+      // Resolve target: pendingRemoteChat > config.lastChatTargets > error
+      let targetTransport = transport || pendingRemoteChat?.transport;
+      let targetChat = chatId || pendingRemoteChat?.chatId;
 
       if (!targetTransport || !targetChat) {
+        // Try persisted fallback per transport
+        const fileConfig = loadFileConfig();
+        const savedTargets = fileConfig.lastChatTargets || {};
+
+        if (!targetTransport && targetChat) {
+          // Have chatId but no transport — search saved targets
+          for (const [t, s] of Object.entries(savedTargets)) {
+            if (s.chatId === targetChat) {
+              targetTransport = t;
+              break;
+            }
+          }
+        } else if (targetTransport && !targetChat) {
+          // Have transport but no chatId — look up by transport
+          const saved = savedTargets[targetTransport];
+          if (saved) targetChat = saved.chatId;
+        } else {
+          // Neither specified — use the only saved target if there's exactly one
+          const entries = Object.entries(savedTargets);
+          if (entries.length === 1) {
+            targetTransport = entries[0][0];
+            targetChat = entries[0][1].chatId;
+          }
+        }
+      }
+
+      if (!targetTransport || !targetChat) {
+        const savedTargets = loadFileConfig().lastChatTargets || {};
+        const savedList = Object.entries(savedTargets)
+          .map(([t, s]) => `${t} (chat ${s.chatId}${s.username ? `, @${s.username}` : ""})`)
+          .join("; ");
         return {
           content: [
             {
               type: "text",
               text:
-                "❌ No target chat available. A user must message the bot first " +
-                "to establish a conversation, or specify both transport and chatId explicitly. " +
+                "❌ No target chat available. " +
+                (savedList
+                  ? `Known targets: ${savedList}. Specify transport and chatId explicitly.`
+                  : "A user must message the bot first to establish a conversation, " +
+                    "or specify both transport and chatId explicitly. ") +
                 "Connected transports: " +
                 transportManager
                   .getAllTransports()

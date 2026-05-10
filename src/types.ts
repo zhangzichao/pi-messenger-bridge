@@ -55,6 +55,10 @@ export interface MsgBridgeConfig {
   autoConnect?: boolean;
   showWidget?: boolean;
   debug?: boolean;
+  /** Per-transport last known chat targets for proactive messaging.
+   * Keyed by transport type ("slack", "telegram", etc).
+   * Persisted from incoming messages, used as fallback by send_bridge_message. */
+  lastChatTargets?: Record<string, { chatId: string; username?: string }>;
 }
 
 /**
