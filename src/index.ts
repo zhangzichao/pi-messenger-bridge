@@ -676,10 +676,6 @@ export default function (pi: ExtensionAPI): void {
           context.ui.notify(lines.join("\n"), "info");
           break;
         }
-        default:
-          context.ui.notify(`Unknown subcommand: ${subcommand}. Run /msg-bridge help`, "warning");
-          break;
-      }
       case "toggletools": {
         const cfg3 = loadConfig();
         cfg3.hideToolCalls = !cfg3.hideToolCalls;
@@ -687,6 +683,10 @@ export default function (pi: ExtensionAPI): void {
         const toolState = cfg3.hideToolCalls ? "hidden" : "shown";
         context.ui.notify(`🔧 Tool calls ${toolState} in remote messages`, "info");
         break;
+      }
+        default:
+          context.ui.notify(`Unknown subcommand: ${subcommand}. Run /msg-bridge help`, "warning");
+          break;
       }
     },
   });
