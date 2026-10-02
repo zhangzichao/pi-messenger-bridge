@@ -61,10 +61,10 @@
   "peerDependencies": {
     "@earendil-works/pi-ai": ">=0.74",
     "@earendil-works/pi-coding-agent": ">=0.74",
-    "@earendil-works/pi-tui": ">=0.74"
+    "@earendil-works/pi-tui": ">=0.74",
+    "@sinclair/typebox": "*"
   },
   "dependencies": {
-    "@sinclair/typebox": "^0.34.49",
     "@slack/bolt": "^4.6.0",
     "@whiskeysockets/baileys": "^7.0.0-rc.9",
     "discord.js": "^14.25.1",
@@ -74,6 +74,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.14",
+    "@sinclair/typebox": "^0.34.49",
     "@types/node": "^25.6.2",
     "@types/node-telegram-bot-api": "^0.64.14",
     "@types/qrcode-terminal": "^0.12.2",
